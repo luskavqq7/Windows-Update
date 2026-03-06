@@ -347,7 +347,7 @@ function Lock-Drives {
                 Write-DebugLog "Drive ${drive} não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao travar drive ${drive}: $_"
+            Write-DebugLog "Erro ao travar drive ${drive}: $($_.Exception.Message)"
             $results += "${drive} erro"
         }
     }
@@ -408,7 +408,7 @@ function Unlock-Drives {
                     Remove-Item $testFile -Force
                     Write-DebugLog "Teste de escrita OK para ${drive}"
                 } catch {
-                    Write-DebugLog "Teste de escrita falhou para ${drive}: $_"
+                    Write-DebugLog "Teste de escrita falhou para ${drive}: $($_.Exception.Message)"
                 }
                 
             } else {
@@ -420,7 +420,7 @@ function Unlock-Drives {
                 Write-DebugLog "Drives disponíveis: $($availableDrives -join ', ')"
             }
         } catch {
-            Write-DebugLog "Erro ao liberar drive ${drive}: $_"
+            Write-DebugLog "Erro ao liberar drive ${drive}: $($_.Exception.Message)"
             $results += "${drive} erro"
         }
     }
