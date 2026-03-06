@@ -291,28 +291,34 @@ function Unlock-Screen {
 }
 
 # ===== TRAVAR MOUSE (VERSÃO SIMPLES E ROBUSTA) =====
-$global:mouseLocked = $false
-$global:lockThread = $null
+$script:mouseLocked = $false
+$script:lockThread = $null
 
 function Lock-Mouse {
     try {
-        if ($global:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
+        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        $global:mouseLocked = $true
-        $global:lockThread = [System.Threading.Thread]::new({
-            while ($global:mouseLocked) {
+        $script:mouseLocked = $true
+        $script:lockThread = [System.Threading.Thread]::new({
+            while ($script:mouseLocked) {
                 try {
                     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
+                    Start-Sleep -Milliseconds 1
                 } catch {
-                    # Ignora erros
+                    # Ignora erros e continua
                 }
             }
         })
-        $global:lockThread.IsBackground = $true
-        $global:lockThread.Start()
+        $script:lockThread.IsBackground = $true
+        $script:lockThread.Start()
         
-        return "MOUSE_LOCKED"
+        # Pequena pausa para garantir que a thread iniciou
+        Start-Sleep -Milliseconds 10
+        if ($script:lockThread.IsAlive) {
+            return "MOUSE_LOCKED"
+        } else {
+            return "MOUSE_ERROR"
+        }
     } catch {
         return "MOUSE_ERROR"
     }
@@ -320,9 +326,10 @@ function Lock-Mouse {
 
 function Unlock-Mouse {
     try {
-        $global:mouseLocked = $false
-        if ($global:lockThread -and $global:lockThread.IsAlive) {
-            $global:lockThread.Abort()
+        $script:mouseLocked = $false
+        if ($script:lockThread -and $script:lockThread.IsAlive) {
+            $script:lockThread.Abort()
+            $script:lockThread = $null
         }
         return "MOUSE_UNLOCKED"
     } catch {
@@ -417,7 +424,7 @@ while ($true) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            # Switch explícito sem wildcards para evitar confusão
+            # Switch explícito sem wildcards
             switch ($cmd) {
                 "screenshot"          { $writer.WriteLine((Get-ScreenCapture)) }
                 "click"               { $writer.WriteLine((Click-Mouse)) }
@@ -470,4 +477,3 @@ while ($true) {
 
 $mutex.ReleaseMutex()
 $mutex.Dispose()
-
