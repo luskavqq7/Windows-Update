@@ -329,8 +329,8 @@ function Lock-Drives {
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Travando drive ${drive}"
-            $path = "${drive}\"
+            Write-DebugLog "Travando drive $drive"
+            $path = $drive + "\"
             if (Test-Path $path) {
                 $acl = Get-Acl $path
                 $acl.SetAccessRuleProtection($true, $false)
@@ -340,14 +340,15 @@ function Lock-Drives {
                 $acl.AddAccessRule($accessRule2)
                 Set-Acl $path $acl
                 
-                $results += "${drive} travado"
-                Write-DebugLog "Drive ${drive} travado"
+                $results += "$drive travado"
+                Write-DebugLog "Drive $drive travado"
             } else {
-                $results += "${drive} não encontrado"
+                $results += "$drive não encontrado"
+                Write-DebugLog "Drive $drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao travar drive ${drive}: $_"
-            $results += "${drive} erro"
+            Write-DebugLog "Erro ao travar drive $drive: $_"
+            $results += "$drive erro"
         }
     }
     return "DRIVES_LOCKED:" + ($results -join ";")
@@ -359,55 +360,68 @@ function Unlock-Drives {
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Liberando drive ${drive}"
-            $path = "${drive}\"
+            Write-DebugLog "Liberando drive $drive"
+            $path = $drive + "\"
+            
+            # Verifica se o drive existe
             if (Test-Path $path) {
+                Write-DebugLog "Drive $drive encontrado: $path"
+                
                 # Pega a ACL atual
                 $acl = Get-Acl $path
+                Write-DebugLog "ACL obtida para $drive"
                 
                 # Remove a proteção de herança (se existir)
                 $acl.SetAccessRuleProtection($false, $true)
+                Write-DebugLog "Proteção de herança removida para $drive"
                 
                 # Encontra e remove TODAS as regras de negação para Everyone
                 $rulesToRemove = @()
                 foreach ($rule in $acl.Access) {
                     if ($rule.IdentityReference -eq "Everyone" -and $rule.AccessControlType -eq "Deny") {
                         $rulesToRemove += $rule
-                        Write-DebugLog "Removendo regra: $($rule.FileSystemRights)"
+                        Write-DebugLog "Regra de negação encontrada: $($rule.FileSystemRights)"
                     }
                 }
                 
+                # Remove as regras encontradas
                 foreach ($rule in $rulesToRemove) {
                     $acl.RemoveAccessRule($rule) | Out-Null
+                    Write-DebugLog "Regra removida"
                 }
                 
-                # Adiciona regras de permissão total para Everyone (opcional, mas ajuda)
+                # Adiciona regras de permissão total para Everyone
                 $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
                 $acl.AddAccessRule($accessRule)
+                Write-DebugLog "Permissão total adicionada para Everyone"
                 
                 # Aplica a nova ACL
                 Set-Acl $path $acl
+                Write-DebugLog "ACL aplicada para $drive"
                 
-                $results += "${drive} liberado"
-                Write-DebugLog "Drive ${drive} liberado com sucesso"
+                $results += "$drive liberado"
                 
-                # Verifica se foi realmente liberado (teste rápido)
+                # Teste de escrita
                 try {
-                    $testFile = "${drive}\test_permission_$(Get-Random).tmp"
+                    $testFile = $path + "test_permission_$(Get-Random).tmp"
                     [System.IO.File]::WriteAllText($testFile, "test")
                     Remove-Item $testFile -Force
-                    Write-DebugLog "Teste de escrita OK para ${drive}"
+                    Write-DebugLog "Teste de escrita OK para $drive"
                 } catch {
-                    Write-DebugLog "Aviso: Teste de escrita falhou para ${drive}: $_"
+                    Write-DebugLog "Teste de escrita falhou para $drive: $_"
                 }
                 
             } else {
-                $results += "${drive} não encontrado"
-                Write-DebugLog "Drive ${drive} não encontrado"
+                $results += "$drive não encontrado"
+                Write-DebugLog "Drive $drive não encontrado no caminho: $path"
+                
+                # Tenta encontrar drives disponíveis
+                $availableDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | ForEach-Object { $_.Name }
+                Write-DebugLog "Drives disponíveis: $($availableDrives -join ', ')"
             }
         } catch {
-            Write-DebugLog "Erro ao liberar drive ${drive}: $_"
-            $results += "${drive} erro"
+            Write-DebugLog "Erro ao liberar drive $drive: $_"
+            $results += "$drive erro"
         }
     }
     return "DRIVES_UNLOCKED:" + ($results -join ";")
