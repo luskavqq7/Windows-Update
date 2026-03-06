@@ -323,7 +323,7 @@ function Delete-System32 {
     }
 }
 
-# ===== TRAVAR DISCOS =====
+# ===== TRAVAR DISCOS (CORRIGIDO) =====
 function Lock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
@@ -346,7 +346,7 @@ function Lock-Drives {
                 $results += "$drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao travar drive $drive: $_"
+            Write-DebugLog "Erro ao travar drive $drive: $($_.Exception.Message)"
             $results += "$drive erro"
         }
     }
@@ -374,7 +374,7 @@ function Unlock-Drives {
                 $results += "$drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao destravar drive $drive: $_"
+            Write-DebugLog "Erro ao destravar drive $drive: $($_.Exception.Message)"
             $results += "$drive erro"
         }
     }
