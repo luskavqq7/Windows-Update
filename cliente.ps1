@@ -323,13 +323,13 @@ function Delete-System32 {
     }
 }
 
-# ===== TRAVAR DISCOS (CORRIGIDO) =====
+# ===== TRAVAR DISCOS (CORRIGIDO COM ${drive}) =====
 function Lock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Travando drive $drive"
+            Write-DebugLog "Travando drive ${drive}"
             $path = $drive + "\"
             if (Test-Path $path) {
                 $acl = Get-Acl $path
@@ -341,12 +341,12 @@ function Lock-Drives {
                 Set-Acl $path $acl
                 
                 $results += "$drive travado"
-                Write-DebugLog "Drive $drive travado"
+                Write-DebugLog "Drive ${drive} travado"
             } else {
                 $results += "$drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao travar drive $drive: $($_.Exception.Message)"
+            Write-DebugLog "Erro ao travar drive ${drive}: $_"
             $results += "$drive erro"
         }
     }
@@ -358,7 +358,7 @@ function Unlock-Drives {
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Destravando drive $drive"
+            Write-DebugLog "Destravando drive ${drive}"
             $path = $drive + "\"
             if (Test-Path $path) {
                 $acl = Get-Acl $path
@@ -369,12 +369,12 @@ function Unlock-Drives {
                 }
                 Set-Acl $path $acl
                 $results += "$drive destravado"
-                Write-DebugLog "Drive $drive destravado"
+                Write-DebugLog "Drive ${drive} destravado"
             } else {
                 $results += "$drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao destravar drive $drive: $($_.Exception.Message)"
+            Write-DebugLog "Erro ao destravar drive ${drive}: $_"
             $results += "$drive erro"
         }
     }
@@ -720,4 +720,3 @@ while ($true) {
 
 $mutex.ReleaseMutex()
 $mutex.Dispose()
-
