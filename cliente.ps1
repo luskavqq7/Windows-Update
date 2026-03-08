@@ -496,7 +496,7 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (VERSÃO CORRIGIDA - TODAS AS CAMADAS) =====
+# ===== TRAVAR MOUSE (CORRIGIDO - TODAS AS CHAVES BALANCEADAS) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
 $script:reinforceThread = $null
