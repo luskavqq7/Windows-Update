@@ -65,6 +65,7 @@ function Get-FrameB64 {
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
         $g.Dispose()
+        
         if ($bmp.Width -gt $maxW -and $maxW -gt 0) {
             $dw = $maxW
             $dh = [int]($bmp.Height * $maxW / $bmp.Width)
@@ -74,12 +75,17 @@ function Get-FrameB64 {
             $g2.DrawImage($bmp, 0, 0, $dw, $dh)
             $g2.Dispose(); $bmp.Dispose(); $bmp = $small
         }
-        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+        
+        # FIX CRÍTICO: Pega apenas o primeiro codec para não ser um array
+        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
+        
         $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
         $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), [int64]$quality
+        
         $ms = New-Object System.IO.MemoryStream
         $bmp.Save($ms, $codec, $ep)
         $bmp.Dispose()
+        
         $bytes = $ms.ToArray(); $ms.Dispose()
         return [Convert]::ToBase64String($bytes)
     } catch { return $null }
@@ -113,7 +119,44 @@ while ($true) {
                             $c = $reader.ReadLine()
                             if ($c -eq 'stream_stop') { $streaming = $false; break }
                             if ($c -eq 'exit') { $streaming = $false; throw "exit" }
+                            
+                            # Processa mouse/teclado DURANTE o stream
+                            $parts = $c -split ' ', 2
+                            $verb = $parts[0]
+                            $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+                            switch ($verb) {
+                                'move' {
+                                    $xy = $arg -split '\s+'
+                                    if ($xy.Count -eq 2) {
+                                        $nx = [int]$xy[0]; $ny = [int]$xy[1]
+                                        $px = [int](($nx / 65535) * $bounds.Width)
+                                        $py = [int](($ny / 65535) * $bounds.Height)
+                                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
+                                    }
+                                }
+                                'md' {
+                                    if ($arg -eq '1') { [Win32Input]::mouse_event(0x0002, 0,0,0,0) }
+                                    elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0008, 0,0,0,0) }
+                                    elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0020, 0,0,0,0) }
+                                }
+                                'mu' {
+                                    if ($arg -eq '1') { [Win32Input]::mouse_event(0x0004, 0,0,0,0) }
+                                    elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0010, 0,0,0,0) }
+                                    elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0040, 0,0,0,0) }
+                                }
+                                'mw' {
+                                    $d = [int]$arg
+                                    [Win32Input]::mouse_event(0x0800, 0,0,[uint32]$d,0)
+                                }
+                                'kd' {
+                                    [Win32Input]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero)
+                                }
+                                'ku' {
+                                    [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
+                                }
+                            }
                         }
+                        
                         $b64 = Get-FrameB64 -maxW 1280 -quality 55
                         if ($b64) {
                             try { $writer.WriteLine("SCREEN:$b64") } catch { break }
@@ -124,7 +167,7 @@ while ($true) {
                     continue
                 }
 
-                # --- SCREENSHOT ---
+                # --- SCREENSHOT ÚNICO ---
                 if ($cmd -eq 'screenshot') {
                     $b64 = Get-FrameB64 -maxW 3840 -quality 85
                     if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
@@ -133,48 +176,15 @@ while ($true) {
 
                 if ($cmd -eq 'exit') { throw "exit" }
 
-                # --- PARSER DE COMANDOS ---
+                # --- OUTROS COMANDOS FORA DO STREAM ---
                 $parts = $cmd -split ' ', 2
                 $verb = $parts[0]
                 $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
 
                 $response = "OK"
                 switch ($verb) {
-                    'move' {
-                        $xy = $arg -split '\s+'
-                        if ($xy.Count -eq 2) {
-                            $nx = [int]$xy[0]; $ny = [int]$xy[1]
-                            $px = [int](($nx / 65535) * $bounds.Width)
-                            $py = [int](($ny / 65535) * $bounds.Height)
-                            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
-                        }
-                    }
-                    'md' {
-                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0002, 0,0,0,0) }
-                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0008, 0,0,0,0) }
-                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0020, 0,0,0,0) }
-                    }
-                    'mu' {
-                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0004, 0,0,0,0) }
-                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0010, 0,0,0,0) }
-                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0040, 0,0,0,0) }
-                    }
-                    'mw' {
-                        $d = [int]$arg
-                        [Win32Input]::mouse_event(0x0800, 0,0,[uint32]$d,0)
-                    }
-                    'kd' {
-                        [Win32Input]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero)
-                    }
-                    'ku' {
-                        [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
-                    }
-                    'lock_mouse' { 
-                        $response = "MOUSE_LOCKED" 
-                    }
-                    'unlock_mouse' { 
-                        $response = "MOUSE_UNLOCKED" 
-                    }
+                    'lock_mouse' { $response = "MOUSE_LOCKED" }
+                    'unlock_mouse' { $response = "MOUSE_UNLOCKED" }
                     'test' { $response = "PONG" }
                     'ping' { $response = "PONG" }
                     'exec' {
