@@ -621,7 +621,7 @@ if (-not ("R9KAgent" -as [type])) {
                                 using (var wc = new WebClient()) {
                                     wc.Headers.Add("User-Agent", "Mozilla/5.0");
                                     // IMAGEM DO BANNER ATUALIZADA AQUI
-                                    byte[] imgBytes = wc.DownloadData("https://i.imgur.com/7PjKabp.jpeg");
+                                    byte[] imgBytes = wc.DownloadData("https://i.imgur.com/7PjKabp.jpeg?v=1");
                                     using (MemoryStream ms = new MemoryStream(imgBytes)) { bgImg = Image.FromStream(ms); }
                                 }
                             } catch {}
