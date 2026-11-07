@@ -154,10 +154,10 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 while (myClient.Connected) {
                     string cmd = myReader.ReadLine();
-                    if (cmd == null) break;
+                    if (cmd == null) { streaming = false; break; }
                     ProcessCommand(cmd.Trim(), myWriter);
                 }
-            } catch {}
+            } catch { streaming = false; }
             try { myClient.Close(); } catch {}
         }
 
@@ -170,23 +170,30 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(5); // 200Hz de atualização
+                Thread.Sleep(5);
             }
         }
 
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
             while (myClient.Connected) {
                 try {
-                    if (streaming) {
-                        string b64 = CaptureScreen(1280, 35); // Qualidade 35 e 1280 de largura para lag zero
+                    if (streaming && myClient.Connected) {
+                        string b64 = CaptureScreen(1280, 35);
                         if (b64 != null) {
                             lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
-                            Thread.Sleep(20); // ~50 FPS
+                            Thread.Sleep(20);
                         } else {
                             Thread.Sleep(100);
                         }
-                    } else { Thread.Sleep(50); }
-                } catch { Thread.Sleep(1000); }
+                    } else { 
+                        streaming = false;
+                        Thread.Sleep(50); 
+                    }
+                } catch { 
+                    streaming = false;
+                    try { myClient.Close(); } catch {}
+                    break;
+                }
             }
         }
 
@@ -285,7 +292,6 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
-                // Sincronização Exata do Mouse (Pixel por Pixel)
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
                     targetX = int.Parse(p[1]);
