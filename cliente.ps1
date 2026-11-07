@@ -184,14 +184,14 @@ if (-not ("R9KAgent" -as [type])) {
                                         bgImg = Image.FromStream(ms);
                                     }
                                 }
-                            } catch {} // Se falhar o download, segue sem imagem
+                            } catch {}
 
                             bannerForm = new Form();
                             bannerForm.FormBorderStyle = FormBorderStyle.None;
                             bannerForm.WindowState = FormWindowState.Maximized;
                             bannerForm.TopMost = true;
                             bannerForm.ShowInTaskbar = false;
-                            bannerForm.BackColor = Color.Black; // Fundo preto caso a imagem falhe
+                            bannerForm.BackColor = Color.Black;
                             
                             if (bgImg != null) {
                                 bannerForm.BackgroundImage = bgImg;
