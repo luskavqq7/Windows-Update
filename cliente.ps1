@@ -39,7 +39,7 @@ if ($args -notcontains "-silent") {
     exit
 }
 
-# MODO INVISÍVEL (silent)
+# MODO INVISÍVEL
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { exit }
 
