@@ -77,7 +77,8 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
                     while (myClient.Connected) {
-                        if (myStream.Socket.Poll(1000, SelectMode.SelectRead) && myStream.Socket.Available == 0) break;
+                        // Correção aqui: usando myClient.Client no lugar de myStream.Socket
+                        if (myClient.Client.Poll(1000, SelectMode.SelectRead) && myClient.Client.Available == 0) break;
                         Thread.Sleep(100);
                     }
                 } catch (Exception ex) { 
