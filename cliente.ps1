@@ -170,7 +170,7 @@ if (-not ("R9KAgent" -as [type])) {
             try { SetProcessDPIAware(); } catch {}
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
-            Thread tInput = new Thread(InputLoop); tInput.Priority = ThreadPriority.Highest; tInput.IsBackground = true; tInput.Start();
+            Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
 
             while (true) {
                 TcpClient myClient = null;
