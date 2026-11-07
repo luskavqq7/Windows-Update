@@ -262,8 +262,12 @@ if (-not ("R9KAgent" -as [type])) {
                     audioClient.GetMixFormat(out pFormat);
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
                     
-                    // 0x00080000 = AUDCLNT_STREAMFLAGS_LOOPBACK
-                    audioClient.Initialize(0, 0x00080000, 10000000, 10000000, pFormat, IntPtr.Zero); 
+                    int hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero); 
+                    if (hr != 0) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Initialize falhou hr=" + hr); }
+                        isAudioRunning = false;
+                        return;
+                    }
                     
                     Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
                     IAudioCaptureClient captureClient;
@@ -271,6 +275,7 @@ if (-not ("R9KAgent" -as [type])) {
                     
                     audioClient.Start();
                     
+                    bool sentFmt = false;
                     while (isAudioRunning && globalWriter != null) {
                         Thread.Sleep(50);
                         uint packetSize;
@@ -287,7 +292,6 @@ if (-not ("R9KAgent" -as [type])) {
                                 byte[] buffer = new byte[bytes];
                                 Marshal.Copy(pData, buffer, 0, bytes);
                                 
-                                // Converte Float32 (WASAPI padrão) para Int16 (Player C++)
                                 if (wfx.wFormatTag == 3) { 
                                     byte[] pcm16 = new byte[bytes / 2];
                                     for (int i = 0; i < bytes / 4; i++) {
@@ -300,7 +304,13 @@ if (-not ("R9KAgent" -as [type])) {
                                 }
                                 
                                 lock (writeLock) {
-                                    if (globalWriter != null) globalWriter.WriteLine("AUDIO:" + Convert.ToBase64String(buffer));
+                                    if (globalWriter != null) {
+                                        if (!sentFmt) {
+                                            globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16");
+                                            sentFmt = true;
+                                        }
+                                        globalWriter.WriteLine("AUDIO:" + Convert.ToBase64String(buffer));
+                                    }
                                 }
                             }
                             captureClient.ReleaseBuffer(numFrames);
@@ -308,7 +318,11 @@ if (-not ("R9KAgent" -as [type])) {
                         }
                     }
                     audioClient.Stop();
-                } catch {}
+                } catch (Exception ex) {
+                    lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: " + ex.Message); }
+                } finally {
+                    isAudioRunning = false;
+                }
             });
             t.SetApartmentState(ApartmentState.STA); 
             t.IsBackground = true;
