@@ -413,6 +413,7 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        // Stream sem Sleep, encode menor, sem concat
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
             while (myClient.Connected) {
                 try {
