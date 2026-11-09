@@ -809,25 +809,22 @@ if (-not ("R9KAgent" -as [type])) {
                         scale = (float)newW / reuseBmp.Width;
                     }
 
-                    int drawX = 0, drawY = 0; bool haveCursor = false; IntPtr drawH = IntPtr.Zero;
-                    if (cursorOverride) { drawX = cursorOverrideX; drawY = cursorOverrideY; haveCursor = true; }
-
-                    CURSORINFO ci = new CURSORINFO();
-                    ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
-                    if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero) {
-                        drawH = ci.hCursor;
-                        if (!haveCursor) { drawX = ci.ptScreenPos.X; drawY = ci.ptScreenPos.Y; haveCursor = true; }
-                    }
-                    if (haveCursor && drawH != IntPtr.Zero) {
-                        int sx = drawX - bounds.X;
-                        int sy = drawY - bounds.Y;
-                        if (sx >= 0 && sy >= 0 && sx < reuseBmp.Width && sy < reuseBmp.Height) {
-                            int dx = (int)(sx * scale);
-                            int dy = (int)(sy * scale);
-                            using (Graphics g3 = Graphics.FromImage(finalBmp)) {
-                                IntPtr hdc = g3.GetHdc();
-                                DrawIconEx(hdc, dx, dy, drawH, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
-                                g3.ReleaseHdc(hdc);
+                    if (cursorOverride) {
+                        CURSORINFO ci = new CURSORINFO();
+                        ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+                        IntPtr hCur = IntPtr.Zero;
+                        if (GetCursorInfo(ref ci) && ci.hCursor != IntPtr.Zero) hCur = ci.hCursor;
+                        if (hCur != IntPtr.Zero) {
+                            int sx = cursorOverrideX - bounds.X;
+                            int sy = cursorOverrideY - bounds.Y;
+                            if (sx >= 0 && sy >= 0 && sx < reuseBmp.Width && sy < reuseBmp.Height) {
+                                int dx = (int)(sx * scale);
+                                int dy = (int)(sy * scale);
+                                using (Graphics g3 = Graphics.FromImage(finalBmp)) {
+                                    IntPtr hdc = g3.GetHdc();
+                                    DrawIconEx(hdc, dx, dy, hCur, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                                    g3.ReleaseHdc(hdc);
+                                }
                             }
                         }
                     }
