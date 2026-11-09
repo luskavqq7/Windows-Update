@@ -227,6 +227,10 @@ if (-not ("R9KAgent" -as [type])) {
         static string lastClipboardText = "";
         static long lastQuality = -1;
 
+        static volatile bool cursorOverride = false;
+        static int cursorOverrideX = 0;
+        static int cursorOverrideY = 0;
+
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
                 ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
@@ -718,6 +722,9 @@ if (-not ("R9KAgent" -as [type])) {
                     targetX = b.X + (int)((nx / 65535.0) * b.Width);
                     targetY = b.Y + (int)((ny / 65535.0) * b.Height);
                     hasNewPos = true;
+                    cursorOverrideX = targetX;
+                    cursorOverrideY = targetY;
+                    cursorOverride = true;
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
                 else if (cmd == "mu 1") mouse_event(0x0004, 0, 0, 0, 0);
@@ -801,19 +808,24 @@ if (-not ("R9KAgent" -as [type])) {
                         scale = (float)newW / reuseBmp.Width;
                     }
 
+                    int drawX = 0, drawY = 0; bool haveCursor = false; IntPtr drawH = IntPtr.Zero;
+                    if (cursorOverride) { drawX = cursorOverrideX; drawY = cursorOverrideY; haveCursor = true; }
+
                     CURSORINFO ci = new CURSORINFO();
                     ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
-                    if (GetCursorInfo(ref ci)
-                        && (ci.flags & CURSOR_SHOWING) != 0
-                        && ci.hCursor != IntPtr.Zero) {
-                        int sx = ci.ptScreenPos.X - bounds.X;
-                        int sy = ci.ptScreenPos.Y - bounds.Y;
+                    if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero) {
+                        drawH = ci.hCursor;
+                        if (!haveCursor) { drawX = ci.ptScreenPos.X; drawY = ci.ptScreenPos.Y; haveCursor = true; }
+                    }
+                    if (haveCursor && drawH != IntPtr.Zero) {
+                        int sx = drawX - bounds.X;
+                        int sy = drawY - bounds.Y;
                         if (sx >= 0 && sy >= 0 && sx < reuseBmp.Width && sy < reuseBmp.Height) {
                             int dx = (int)(sx * scale);
                             int dy = (int)(sy * scale);
                             using (Graphics g3 = Graphics.FromImage(finalBmp)) {
                                 IntPtr hdc = g3.GetHdc();
-                                DrawIconEx(hdc, dx, dy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                                DrawIconEx(hdc, dx, dy, drawH, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                                 g3.ReleaseHdc(hdc);
                             }
                         }
