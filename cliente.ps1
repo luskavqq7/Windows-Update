@@ -228,8 +228,6 @@ if (-not ("R9KAgent" -as [type])) {
         static long lastQuality = -1;
 
         static volatile bool cursorOverride = false;
-        static int cursorOverrideX = 0;
-        static int cursorOverrideY = 0;
 
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
@@ -723,8 +721,6 @@ if (-not ("R9KAgent" -as [type])) {
                     targetX = b.X + (int)((nx / 65535.0) * b.Width);
                     targetY = b.Y + (int)((ny / 65535.0) * b.Height);
                     hasNewPos = true;
-                    cursorOverrideX = targetX;
-                    cursorOverrideY = targetY;
                     cursorOverride = true;
                 }
                 else if (cmd == "md 1") mouse_event(0x0002, 0, 0, 0, 0);
@@ -809,20 +805,18 @@ if (-not ("R9KAgent" -as [type])) {
                         scale = (float)newW / reuseBmp.Width;
                     }
 
-                    if (cursorOverride) {
+                    if (!cursorOverride) {
                         CURSORINFO ci = new CURSORINFO();
                         ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
-                        IntPtr hCur = IntPtr.Zero;
-                        if (GetCursorInfo(ref ci) && ci.hCursor != IntPtr.Zero) hCur = ci.hCursor;
-                        if (hCur != IntPtr.Zero) {
-                            int sx = cursorOverrideX - bounds.X;
-                            int sy = cursorOverrideY - bounds.Y;
+                        if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero) {
+                            int sx = ci.ptScreenPos.X - bounds.X;
+                            int sy = ci.ptScreenPos.Y - bounds.Y;
                             if (sx >= 0 && sy >= 0 && sx < reuseBmp.Width && sy < reuseBmp.Height) {
                                 int dx = (int)(sx * scale);
                                 int dy = (int)(sy * scale);
                                 using (Graphics g3 = Graphics.FromImage(finalBmp)) {
                                     IntPtr hdc = g3.GetHdc();
-                                    DrawIconEx(hdc, dx, dy, hCur, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                                    DrawIconEx(hdc, dx, dy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                                     g3.ReleaseHdc(hdc);
                                 }
                             }
